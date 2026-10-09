@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 1.0 (approved baseline) · 9 October 2026 · michael"
-version: "1.0"
+subtitle: "Version 1.1 · 9 October 2026 · michael"
+version: "1.1"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 1.1 | 2026-10-09 | minor revision | VER-01 and M1: kernel fixtures generated with SymPy instead of Maple |
 | 1.0 | 2026-10-09 | approved baseline | content of 0.2 approved by michael as the implementation baseline; sources moved to `docs/` in the wfmat repository, which is now the master copy; tagged `spec-v1.0` |
 | 0.2 | 2026-10-09 | preliminary draft | requirement identifiers added to every normative statement; requirements index (appendix A); tests cite the IDs they verify |
 | 0.1 | 2026-10-09 | preliminary draft | first complete draft; scope decisions of 2026-10-08 applied (single loop, interior MAT, C++20, bulge JSON input) |
@@ -394,7 +395,7 @@ Result<std::vector<Loop>> inward_offset(const Region&, double distance, const Op
 
 Every test cites the requirement identifiers it verifies. Correctness is established at three levels: the kernel against closed-form answers, whole MATs against shapes with known axes and against an independent oracle, and every run against the defining property of the MAT.
 
-**[VER-01] Kernel unit tests.** Every site pair and triple type (line, convex arc, concave arc, point) for the three-site solve, shock trajectories and contact times, compared with symbolic results (generated once in Maple and stored as fixtures). Near-tangent and ill-conditioned cases check the binary128 refinement.
+**[VER-01] Kernel unit tests.** Every site pair and triple type (line, convex arc, concave arc, point) for the three-site solve, shock trajectories and contact times, compared with exact symbolic results (generated once with SymPy, `tools/fixtures/gen_kernel_fixtures.py`, and stored as fixtures). Near-tangent and ill-conditioned cases check the binary128 refinement.
 
 **[VER-02] Canonical shapes with known MAT**
 
@@ -427,7 +428,7 @@ Every test cites the requirement identifiers it verifies. Correctness is establi
 Implementation proceeds in seven v1 increments (M4, holes, moves to v2), each closed by an exit test, so that the hardest parts (arcs, clusters) land on a validated base; no dates are set yet.
 
 1. **M0 Scaffold.** CMake project, geom, input validation and normalisation, JSON reader, SVG writer, brute-force distance validator. Exit: all canonical shapes load, validate and render.
-2. **M1 Kernel.** Site equations, three-site solve, trajectories, contact times, binary128 refinement. Exit: kernel unit tests pass against the Maple fixtures.
+2. **M1 Kernel.** Site equations, three-site solve, trajectories, contact times, binary128 refinement. Exit: kernel unit tests pass against the SymPy fixtures.
 3. **M2 Polygons.** Lines and reflex point sites, events E1a, E1b, E2, E3, all-pairs broad phase. Exit: matches the Boost.Polygon oracle on $10^4$ random polygons.
 4. **M3 Arcs.** Convex and concave arcs, tangent joins, E1c. Exit: canonical arc shapes and the sampling oracle.
 5. **M4 Holes (v2).** Multiple loops and loop merges. Exit: Betti-number check and annulus tests.

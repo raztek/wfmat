@@ -52,7 +52,7 @@ fast-math [LIB-03].
 | `src/` | library sources (`wfmat` core, `wfmat_io` for JSON and SVG) |
 | `tools/wfmat-cli.cpp` | command-line tool |
 | `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes and kernel fixtures |
-| `tools/fixtures/` | fixture generators: SymPy (`gen_kernel_fixtures.py`) and a Maple cross-check |
+| `tools/fixtures/` | fixture generator for the kernel tests (SymPy, `gen_kernel_fixtures.py`) |
 | `docs/` | specification sources and PDF |
 
 ## Tests and requirement IDs

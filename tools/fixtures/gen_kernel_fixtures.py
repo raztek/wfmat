@@ -3,8 +3,7 @@
 
 Every site parameter is a double; the oracle converts it to an exact rational and solves the
 squared site equations exactly with SymPy, then keeps the real roots that satisfy the unsquared
-equations (t >= 0, non-negative circle radii), evaluated to 40 digits. kernel_fixtures.mpl does
-the same in Maple for cross-checking.
+equations (t >= 0, non-negative circle radii), evaluated to 40 digits.
 
 Usage: python3 tools/fixtures/gen_kernel_fixtures.py > tests/data/kernel/three_site.json
 """
