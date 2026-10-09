@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <numbers>
+#include <vector>
 
 namespace wfmat::io {
 
@@ -79,6 +80,16 @@ void SvgWriter::joins(const PreparedRegion& region)
                  "\" cy=\"" + num(region.xf.from_unit(j.p).y) + "\" r=\"" + num(marker_) + "\"/>\n";
 }
 
+void SvgWriter::medial_axis(const MedialAxis& mat, int samples_per_edge)
+{
+    std::vector<Vec2> pts;
+    for (const MatEdge& e : mat.edges()) {
+        pts.clear();
+        for (int k = 0; k <= samples_per_edge; ++k) pts.push_back(e.point_at(double(k) / samples_per_edge));
+        polyline(pts, "curve");
+    }
+}
+
 void SvgWriter::disk(Vec2 centre, double r, std::string_view css_class)
 {
     body_ += "<circle class=\"" + std::string(css_class) + "\" cx=\"" + num(centre.x) + "\" cy=\"" + num(centre.y) +
@@ -126,6 +137,15 @@ std::string render_svg(const PreparedRegion& region, const SvgOptions& options)
 {
     SvgWriter w(caller_bbox(region), options);
     w.boundary(region);
+    if (options.show_joins) w.joins(region);
+    return w.str();
+}
+
+std::string render_svg(const PreparedRegion& region, const MedialAxis& mat, const SvgOptions& options)
+{
+    SvgWriter w(caller_bbox(region), options);
+    w.boundary(region);
+    w.medial_axis(mat);
     if (options.show_joins) w.joins(region);
     return w.str();
 }

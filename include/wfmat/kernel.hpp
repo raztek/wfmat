@@ -7,6 +7,7 @@
 #pragma once
 
 #include <array>
+#include <limits>
 #include <optional>
 #include <vector>
 
@@ -60,10 +61,12 @@ struct Solve3 {
     bool degenerate = false;   // rank-deficient system: parallel lines, concentric circles, ... [KN-02]
 };
 
-// [KN-01] Three-site solve. Accepts roots with t >= t_now - eps_t, non-negative circle radii and a
-// unit-frame residual |d_i(p) - t| <= eps_geom for all three sites. Whether each foot lies on the
-// live part of its front element is the engine's check.
-Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, const Tolerances& tol);
+// [KN-01] Three-site solve. Accepts roots with t_now - eps_t <= t <= t_max, non-negative circle
+// radii and a unit-frame residual |d_i(p) - t| <= eps_geom for all three sites. Whether each foot
+// lies on the live part of its front element is the engine's check. The engine passes the largest
+// possible radius as t_max, which spares the binary128 refinement of irrelevant far roots.
+Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, const Tolerances& tol,
+                   double t_max = std::numeric_limits<double>::infinity());
 
 // [KN-02] The earliest accepted root, if any.
 std::optional<Root3> earliest(const Solve3& s);
