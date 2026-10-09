@@ -311,14 +311,16 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 
 Measured in M6 (release build, one core of the CI-class cloud machine, `compute_mat` on a prepared region; the benchmark suite reports `prepare` separately):
 
-| Family (VER-07) | 1,000 segments | 10,000 segments |
-| --- | --- | --- |
-| Filleted star (random fillets) | 17 ms | 1.3 s |
-| Wavy outline (smooth star) | 80 ms | 0.6 s |
-| Spiky star | 120 ms | 15 s |
-| Gear | 530 ms | over 15 s |
+| Family (VER-07) | 1,000 segments | 10,000 segments | larger |
+| --- | --- | --- | --- |
+| Filleted star (random fillets) | 17 ms | 1.3 s | 36 s at 50,000; fails at 100,000 (below) |
+| Wavy outline (smooth star) | 80 ms | 0.6 s | 10 s at 100,000 |
+| Spiky star | 120 ms | 15 s | 10 min at 50,000 |
+| Gear | 530 ms | over 15 min | 17 s at 4,000 |
 
 The broad phase meets the identical-sequence requirement [EV-12] but not these targets: the boxes of neighbours on the same smooth curve overlap in every window, and fronts that converge on one point (gears, regular polygons) make every pair a candidate. Closing the gap is follow-up work.
+
+The filleted star of 100,000 segments still fails: its spikes are so thin that near-flat fillet arcs face nearly parallel sides, and the shocks between them are fast and ill-conditioned enough to leave two-element loops that never close, or links that fail RB-03. Two such cases from 40,000 and 100,000 segments are fixed and kept as regression shapes; the rest is follow-up work on the conditioning of fast shocks.
 
 The targets are budgets for v1 to be measured against, not results; the benchmark suite in section 12 tracks them. Parallelism is out of scope for v1, because the event order is inherently sequential; batch processing of many shapes is parallel by construction, since runs share no state.
 
