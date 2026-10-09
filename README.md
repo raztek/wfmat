@@ -10,9 +10,12 @@ Each approved spec version is tagged `spec-vX.Y`.
 
 ## Status
 
-Milestone M0 (scaffold): input in bulge form from C++ or JSON, validation and normalisation,
-corner classification, SVG rendering and a brute-force distance validator. The propagation
-engine arrives with M1 to M3; see section 13 of the spec.
+- M0 (scaffold): input in bulge form from C++ or JSON, validation and normalisation, corner
+  classification, SVG rendering and a brute-force distance validator.
+- M1 (kernel): sites and their distance functions, the three-site solve, shock positions and
+  velocities, regular-vertex hits, contact times, and binary128 refinement (`wfmat/kernel.hpp`).
+
+The propagation engine arrives with M2 and M3; see section 13 of the spec.
 
 ## Building
 
@@ -45,10 +48,11 @@ fast-math [LIB-03].
 
 | Path | Contents |
 | --- | --- |
-| `include/wfmat/` | public headers: `geom`, `region`, `options`, `result`, `prepare`, `validate`, `io/json`, `io/svg` |
+| `include/wfmat/` | public headers: `geom`, `region`, `options`, `result`, `prepare`, `kernel`, `validate`, `io/json`, `io/svg` |
 | `src/` | library sources (`wfmat` core, `wfmat_io` for JSON and SVG) |
 | `tools/wfmat-cli.cpp` | command-line tool |
-| `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes |
+| `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes and kernel fixtures |
+| `tools/fixtures/` | fixture generators: SymPy (`gen_kernel_fixtures.py`) and a Maple cross-check |
 | `docs/` | specification sources and PDF |
 
 ## Tests and requirement IDs

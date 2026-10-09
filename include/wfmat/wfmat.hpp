@@ -2,6 +2,7 @@
 #pragma once
 
 #include "wfmat/geom.hpp"
+#include "wfmat/kernel.hpp"
 #include "wfmat/options.hpp"
 #include "wfmat/prepare.hpp"
 #include "wfmat/region.hpp"
