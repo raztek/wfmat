@@ -59,3 +59,7 @@ fast-math [LIB-03].
 
 Every test names the spec requirements it verifies as Catch2 tags, for example `[IN-04]`, so
 `./build/tests/wfmat_tests "[IN-04]"` runs the tests for one requirement.
+
+## Licence
+
+MIT; see [`LICENSE`](LICENSE). Third-party code keeps its own licence (`third_party/README.md`).
