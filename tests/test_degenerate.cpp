@@ -367,6 +367,29 @@ TEST_CASE("Corridors: plateaus ending at reflex corners", "[M5][RB-03][VER-03][V
     CHECK(family.failures == 0);
 }
 
+TEST_CASE("A tangency a cluster radius from a tangent join", "[M5][RB-03][EV-12]")
+{
+    // Cut from a 40,000-segment filleted star: a slit's end arc touches the nearly parallel side of
+    // the next spike 9e-10 from the arc's join with its own side, and the contact and the join's
+    // split form one cluster. The tangent ports' directions are known only to the cluster radius
+    // over the arc's radius. Tolerances are those of the whole star.
+    const Region region = load("near-tangent-slit.json");
+    Options options;
+    const double f = 2.8452320593455993;  // the star's frame over this piece's
+    options.tol.geom *= f;
+    options.tol.len *= f;
+    options.tol.time *= f;
+    const PreparedRegion prep = prepared(region, options);
+    auto mat = compute_mat(prep, options);
+    REQUIRE(mat);
+    CHECK(mat->stats().clusters == 1);
+    CHECK(check_mat(prep, *mat, 1e-9, 4).empty());
+    options.broad_phase = BroadPhase::all_pairs;
+    auto all = compute_mat(prep, options);
+    REQUIRE(all);
+    CHECK(identical_mat(*mat, *all).empty());
+}
+
 TEST_CASE("Degeneracy suite", "[M5][RB-02][RB-03][RB-04][EV-12][VER-03][VER-06]")
 {
     const int shapes = degenerate_shape_count();

@@ -350,21 +350,29 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         int anchor;
         double angle;  // direction away from the anchor along the front
         double k;      // lateral curvature: larger is further counter-clockwise
+        double slack;  // how far the direction can turn as the anchor moves within the cluster radius
         double rel = 0.0;
     };
     std::vector<Port> ports;
     std::vector<std::uint32_t> fresh;
+    // How far the points of a point cluster are from its anchor; a plateau's anchors are its ends.
+    double spread = rho;
+    if (!plateau)
+        for (Vec2 q : points) spread = std::max(spread, dist(q, anchors[0].p));
     auto port = [&](std::uint32_t id, bool in, int k) {
         const Site& s = site(id);
         const Vec2 f = front_point(s, t, anchors[k].p);
         const Vec2 g = s.gradient(f);
         const Vec2 u = in ? Vec2{-g.y, g.x} : Vec2{g.y, -g.x};
-        double lateral = 0.0;
+        double lateral = 0.0, slack = 0.0;
         if (!s.is_line()) {
             const double r = s.offset_radius(t);
-            if (r > rho) lateral = dot(s.centre - f, perp(u)) / (r * r);
+            if (r > rho) {
+                lateral = dot(s.centre - f, perp(u)) / (r * r);
+                slack = spread / r;
+            }
         }
-        ports.push_back({id, in, k, angle_of(u), lateral, 0.0});
+        ports.push_back({id, in, k, angle_of(u), lateral, slack, 0.0});
     };
     for (std::size_t i = 0; i < m; ++i) {
         if (!touched[i]) continue;
@@ -412,10 +420,13 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         if (a.anchor != b.anchor) return a.anchor > b.anchor;
         return a.rel != b.rel ? a.rel < b.rel : a.element < b.element;
     });
-    // Directions equal within eps_ang (tangent fronts) are ordered by curvature.
+    // Directions equal within eps_ang (tangent fronts) are ordered by curvature. The direction of a
+    // curved front of radius r is only known to within spread / r, since the anchor stands for every
+    // point of the cluster: a tangency a cluster radius from a vertex is still a tangency [RB-03].
     for (std::size_t i = 0; i < ports.size();) {
         std::size_t j = i + 1;
-        while (j < ports.size() && ports[j].anchor == ports[i].anchor && ports[j].rel - ports[j - 1].rel <= tol_.ang)
+        while (j < ports.size() && ports[j].anchor == ports[i].anchor &&
+               ports[j].rel - ports[j - 1].rel <= tol_.ang + ports[j].slack + ports[j - 1].slack)
             ++j;
         std::sort(ports.begin() + static_cast<std::ptrdiff_t>(i), ports.begin() + static_cast<std::ptrdiff_t>(j),
                   [](const Port& a, const Port& b) { return a.k != b.k ? a.k < b.k : a.element < b.element; });
@@ -488,8 +499,9 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     for (const auto& [i, j] : links) {
         const Port &in = ports[i], &out = ports[j];
         const Anchor& a = anchors[in.anchor];
+        // Tangent ports ordered by curvature can be measured the other way round.
         double sweep = wrap_2pi(in.angle - out.angle);
-        if (sweep > two_pi - tol_.ang) sweep = 0.0;
+        if (sweep > two_pi - (tol_.ang + in.slack + out.slack)) sweep = 0.0;
         auto v = add_shock(in.element, out.element, a.p, t, a.mv, polar(out.angle + 0.5 * sweep));
         if (!v) return tl::unexpected(v.error());
         elements_[in.element].next = *v;
