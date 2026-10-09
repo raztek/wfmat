@@ -149,13 +149,12 @@ TEST_CASE("Output is deterministic and independent of orientation and placement"
     }
 }
 
-TEST_CASE("Arcs and clusters are refused until their milestones", "[M2][API-03]")
+TEST_CASE("Clusters and plateaus are refused until M5", "[M2][M3][API-03]")
 {
-    SECTION("an arc") {
+    SECTION("a slot: a plateau between the arc centres") {
         const auto mat = compute_mat(load("slot.json"));
         REQUIRE_FALSE(mat.has_value());
         CHECK(mat.error().code == ErrorCode::unsupported);
-        CHECK(mat.error().requirement == "M3");
     }
     SECTION("a square: four collapses at the centre") {
         const auto mat = compute_mat(polygon({{0, 0}, {1, 0}, {1, 1}, {0, 1}}));

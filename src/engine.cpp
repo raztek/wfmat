@@ -22,6 +22,10 @@ constexpr double t_max = 1.5;
 // Distance within which the third vertex of a vanishing three-element loop must meet the other two.
 constexpr double annihilation_slack = 1e-7;
 
+// The same for the two shocks of a vanishing two-element loop. They meet at a tangency of their
+// fronts, where a rounding error delta in t moves them by about sqrt(delta R).
+constexpr double tangency_slack = 1e-5;
+
 std::string point_text(Vec2 p, double t)
 {
     char buf[96];
@@ -77,21 +81,14 @@ Result<void> Engine::run()
 }
 
 // [ALG-03] One element per site in boundary order, a point element at every reflex corner, a
-// shock at every convex corner and a regular vertex on each side of a reflex corner.
+// shock at every convex corner, a regular vertex at every tangent join and one on each side of a
+// reflex corner. A regular vertex moves along the inward normal of its segment at the join.
 Result<void> Engine::initialise()
 {
     const auto& segs = region_.segments;
     const std::size_t n = segs.size();
-    for (std::size_t i = 0; i < n; ++i) {
-        if (segs[i].is_arc())
-            return make_error(ErrorCode::unsupported, "M3", "circular arcs are handled from milestone M3", 0,
-                              region_.sources[i].front());
-        if (region_.joins[i].kind == JoinKind::tangent)
-            return make_error(ErrorCode::unsupported, "M3", "tangent joins are handled from milestone M3", 0,
-                              region_.sources[i].back());
-    }
 
-    std::vector<std::uint32_t> line(n), corner(n, no_id);
+    std::vector<std::uint32_t> line(n), corner(n, no_id);  // segment and reflex-corner elements
     for (std::uint32_t i = 0; i < n; ++i) {
         line[i] = add_element(add_site(site_of(segs[i]), region_.sources[i].front(), false), 0);
         if (region_.joins[i].kind == JoinKind::reflex)
@@ -116,8 +113,10 @@ Result<void> Engine::initialise()
         const Join& join = region_.joins[i];
         const std::uint32_t next = line[(i + 1) % n];
         if (join.kind == JoinKind::reflex) {
-            regular(line[i], corner[i], join.p, site(line[i]).n);
-            regular(corner[i], next, join.p, site(next).n);
+            regular(line[i], corner[i], join.p, site(line[i]).gradient(join.p));
+            regular(corner[i], next, join.p, site(next).gradient(join.p));
+        } else if (join.kind == JoinKind::tangent) {
+            regular(line[i], next, join.p, unit(site(line[i]).gradient(join.p) + site(next).gradient(join.p)));
         } else {
             const std::uint32_t mv = add_mat_vertex(join.p, 0.0, VertexKind::corner, {line[i], next});
             auto v = add_shock(line[i], next, join.p, 0.0, mv);
@@ -129,8 +128,7 @@ Result<void> Engine::initialise()
     const auto m = static_cast<std::uint32_t>(elements_.size());
     for (std::uint32_t e = 0; e < m; ++e) schedule_collapse(e);
     for (std::uint32_t v = 0; v < vertices_.size(); ++v)
-        if (vertices_[v].type == VertexType::shock)
-            for (std::uint32_t e = 0; e < m; ++e) schedule_split(v, e);
+        for (std::uint32_t e = 0; e < m; ++e) schedule_split(v, e);
     for (std::uint32_t x = 0; x < m; ++x)
         for (std::uint32_t y = x + 1; y < m; ++y) schedule_contact(x, y);
     return {};
@@ -170,15 +168,16 @@ bool Engine::live(std::uint32_t element, Vec2 p, double t) const
         const double sp = dot(tan, p - *pl), sr = dot(tan, *pr - *pl);
         return sp >= -slack && sp <= sr + slack;
     }
-    // A point element's front runs clockwise about the site, over less than half a turn.
+    // A circle element's front runs counter-clockwise about the centre for a convex arc and
+    // clockwise for a concave arc or a point.
     const Vec2 c = s.centre;
     const double r = dist(p, c);
     if (r <= slack) return true;
     const double ang = slack / r;
-    auto angle = [&](Vec2 q) { return std::atan2(q.y - c.y, q.x - c.x); };
+    auto angle = [&](Vec2 q) { return s.sigma * std::atan2(q.y - c.y, q.x - c.x); };
     const double al = angle(*pl);
-    double sweep = wrap_2pi(al - angle(*pr));
-    double sp = wrap_2pi(al - angle(p));
+    double sweep = wrap_2pi(angle(*pr) - al);
+    double sp = wrap_2pi(angle(p) - al);
     if (sweep > two_pi - ang) sweep = 0.0;
     if (sp > two_pi - ang) sp = 0.0;
     return sp <= sweep + ang;
@@ -221,7 +220,7 @@ std::uint32_t Engine::add_element(SiteId s, std::uint32_t loop)
     return static_cast<std::uint32_t>(elements_.size() - 1);
 }
 
-std::uint32_t Engine::add_mat_vertex(Vec2 p, double t, VertexKind kind, std::initializer_list<std::uint32_t> elements)
+std::uint32_t Engine::add_mat_vertex(Vec2 p, double t, VertexKind kind, const std::vector<std::uint32_t>& elements)
 {
     OutVertex v{p, t, kind, {}};
     for (std::uint32_t e : elements) {
@@ -302,14 +301,15 @@ void Engine::push(Event ev)
     queue_.push(ev);
 }
 
-// [EV-01], [EV-02] The element shrinks to a point when its two vertices meet.
+// [EV-01], [EV-02], [EV-03] The element shrinks to a point when its two vertices meet; [EV-08] a
+// two-element loop vanishes where its two fronts touch.
 void Engine::schedule_collapse(std::uint32_t e)
 {
     const FrontElement& el = elements_[e];
     const std::uint32_t lv = el.prev, rv = el.next;
     const FrontVertex &l = vertices_[lv], &r = vertices_[rv];
     const std::uint32_t a = l.left, c = r.right;
-    if (a == e || c == e || a == c) return;
+    if (a == e || c == e) return;
 
     auto enqueue = [&](double t, Vec2 p) {
         Event ev;
@@ -320,6 +320,26 @@ void Engine::schedule_collapse(std::uint32_t e)
         ev.versions = {el.version, 0};
         push(ev);
     };
+
+    // E1c: two regular vertices close in on the centre of a convex arc at t = R.
+    if (l.type == VertexType::regular && r.type == VertexType::regular) {
+        const Site& s = site(e);
+        if (s.is_line() || s.sigma < 0 || s.R < t_now_ - tol_.time) return;
+        enqueue(s.R, s.centre);
+        return;
+    }
+
+    if (a == c) {
+        if (l.type != VertexType::shock || r.type != VertexType::shock) return;
+        for (const Contact& k : contacts(site(a), site(e), t_now_, tol_)) {
+            if (k.plateau || k.t < std::max(l.t0, r.t0) - tol_.time) continue;
+            const auto pl = position(lv, k.t), pr = position(rv, k.t);
+            if ((pl && dist(*pl, k.p) > tangency_slack) || (pr && dist(*pr, k.p) > tangency_slack)) continue;
+            enqueue(k.t, k.p);
+            return;
+        }
+        return;
+    }
 
     if (l.type == VertexType::shock && r.type == VertexType::shock) {
         const SiteId sa = elements_[a].site, sc = elements_[c].site;
@@ -333,7 +353,6 @@ void Engine::schedule_collapse(std::uint32_t e)
         }
         return;
     }
-    if (l.type == VertexType::regular && r.type == VertexType::regular) return;
 
     // E1b: the shock reaches the regular vertex q(t) = q0 + t m when the shock's other site is at
     // distance t from q(t).
@@ -352,7 +371,11 @@ void Engine::schedule_collapse(std::uint32_t e)
 void Engine::schedule_split(std::uint32_t v, std::uint32_t c)
 {
     const FrontVertex& vx = vertices_[v];
-    if (vx.type != VertexType::shock || !vx.alive || !elements_[c].alive) return;
+    if (!vx.alive || !elements_[c].alive) return;
+    if (vx.type == VertexType::regular) {
+        schedule_regular_split(v, c);
+        return;
+    }
     const std::uint32_t a = vx.left, b = vx.right;
     if (c == a || c == b || c == prev_element(a) || c == next_element(b)) return;
     if (elements_[c].loop != elements_[a].loop) return;
@@ -375,6 +398,38 @@ void Engine::schedule_split(std::uint32_t v, std::uint32_t c)
     }
 }
 
+// [EV-04] with a regular vertex: the front of c reaches the regular vertex A|B, the junction of a
+// reflex corner or a tangent join, inside the live part of c. Unlike a shock, a regular vertex
+// can be reached by an element next but one: the second intersection of two adjacent circle fronts
+// sweeps along their common neighbour. When the shock between c and A or B reaches the regular
+// vertex itself, the event is the E1b collapse instead.
+void Engine::schedule_regular_split(std::uint32_t g, std::uint32_t c)
+{
+    const FrontVertex& gv = vertices_[g];
+    const std::uint32_t a = gv.left, b = gv.right;
+    if (c == a || c == b || elements_[c].loop != elements_[a].loop) return;
+    const SiteId sc = elements_[c].site;
+    if (sc == elements_[a].site || sc == elements_[b].site) return;
+
+    const auto t = regular_hit_time(gv.p0, gv.m, sites[sc], t_now_, tol_);
+    if (!t || *t < gv.t0 - tol_.time) return;
+    const Vec2 q = gv.p0 + *t * gv.m;
+    if (!live(c, q, *t)) return;
+    for (const std::uint32_t joint : {elements_[b].next, elements_[a].prev}) {
+        const FrontVertex& j = vertices_[joint];
+        if ((j.left == c || j.right == c) && (j.type == VertexType::regular || branch_ok(joint, q))) return;
+    }
+
+    Event ev;
+    ev.t = *t;
+    ev.kind = EventKind::split;
+    ev.p = q;
+    ev.elements = {c, no_id};
+    ev.versions = {elements_[c].version, 0};
+    ev.vertex = g;
+    push(ev);
+}
+
 // [EV-05], [KN-05] Two non-adjacent elements touch along a common normal.
 void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
 {
@@ -391,9 +446,20 @@ void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
         ev.elements = {x, y};
         ev.versions = {elements_[x].version, elements_[y].version};
         if (k.plateau) {
-            // Antiparallel lines: report the plateau only when the live parts overlap at t*.
+            // Antiparallel lines or concentric arcs: report the plateau only when the live parts
+            // overlap at t*.
             const Site& s = sites[sx];
-            if (!s.is_line()) continue;
+            if (!s.is_line()) {
+                std::optional<Vec2> shared;
+                for (auto [u, w] : {std::pair{x, y}, std::pair{y, x}})
+                    for (std::uint32_t v : {elements_[w].prev, elements_[w].next})
+                        if (const auto q = position(v, k.t); q && !shared && live(u, *q, k.t)) shared = q;
+                if (!shared) continue;
+                ev.kind = EventKind::plateau;
+                ev.p = *shared;
+                push(ev);
+                return;
+            }
             const Vec2 tan{s.n.y, -s.n.x};
             const auto x0 = position(elements_[x].prev, k.t), x1 = position(elements_[x].next, k.t);
             const auto y0 = position(elements_[y].next, k.t), y1 = position(elements_[y].prev, k.t);
@@ -451,8 +517,8 @@ bool Engine::valid(const Event& ev) const
 }
 
 // [RB-02] Other valid events at the same time and place form a cluster with ev. Cluster
-// resolution arrives with M5; until then a cluster is reported, except the three collapses of a
-// vanishing three-element loop, which handle_collapse treats as one event.
+// resolution arrives with M5; until then a cluster is reported, except the collapses of a
+// vanishing loop of two or three elements, which handle_collapse treats as one event.
 Result<void> Engine::check_cluster(const Event& ev)
 {
     auto same = [](const Event& a, const Event& b) {
@@ -460,7 +526,7 @@ Result<void> Engine::check_cluster(const Event& ev)
         return (a.elements[0] == b.elements[0] && a.elements[1] == b.elements[1]) ||
                (a.elements[0] == b.elements[1] && a.elements[1] == b.elements[0]);
     };
-    const bool vanishing = ev.kind == EventKind::collapse && loop_size(ev.elements[0], 4) == 3;
+    const bool vanishing = ev.kind == EventKind::collapse && loop_size(ev.elements[0], 4) <= 3;
 
     std::vector<Event> held;
     bool cluster = false;
@@ -483,40 +549,76 @@ Result<void> Engine::check_cluster(const Event& ev)
     return {};
 }
 
-// [EV-01] E1a and [EV-02] E1b; [EV-08] a three-element loop vanishes at its junction.
+// [EV-08] Every vertex of a loop of two or three elements meets at ev.p: the loop vanishes. The
+// MAT vertex closes the edges of its shocks: three make a junction, two a maximum of r, one the
+// centre of a convex arc (a curvature end), none a disk.
+std::optional<Result<void>> Engine::annihilate(const Event& ev)
+{
+    const std::uint32_t e = ev.elements[0];
+    std::vector<std::uint32_t> loop, corners;
+    std::uint32_t x = e;
+    do {
+        loop.push_back(x);
+        corners.push_back(elements_[x].next);
+        x = next_element(x);
+    } while (x != e && loop.size() < 4);
+    if (loop.size() > 3) return std::nullopt;
+
+    std::size_t shocks = 0;
+    for (std::uint32_t v : corners) {
+        const auto p = position(v, ev.t);
+        // A two-shock loop meets at a tangency, where the positions may round away.
+        const double slack = loop.size() == 2 ? tangency_slack : annihilation_slack;
+        if (p ? dist(*p, ev.p) > slack : loop.size() > 2) return std::nullopt;
+        shocks += vertices_[v].type == VertexType::shock;
+    }
+    if (loop.size() == 3 && shocks == 0)
+        return unsupported("EV-08", "a loop of three tangent arcs vanishing", ev.p, ev.t, "M5");
+
+    const VertexKind kind = shocks == 3   ? VertexKind::junction
+                            : shocks == 2 ? VertexKind::extremum_max
+                                          : VertexKind::curvature_end;
+    // A convex arc whose centre is the vanishing point touches the disk along its whole length:
+    // its ends are among the other contacts.
+    std::vector<std::uint32_t> touching;
+    for (std::uint32_t y : loop) {
+        const Site& s = site(y);
+        if (s.is_line() || dist(s.centre, ev.p) > annihilation_slack) touching.push_back(y);
+    }
+    const std::uint32_t mv = add_mat_vertex(ev.p, ev.t, kind, touching);
+    for (std::uint32_t v : corners) {
+        close_edge(v, mv, ev.p, ev.t);
+        vertices_[v].alive = false;
+    }
+    for (std::uint32_t y : loop) {
+        elements_[y].alive = false;
+        ++elements_[y].version;
+    }
+    ++stats.annihilations;
+    return Result<void>{};
+}
+
+// [EV-01] E1a, [EV-02] E1b and [EV-03] E1c; [EV-08] a small loop vanishing.
 Result<void> Engine::handle_collapse(const Event& ev)
 {
+    if (auto r = annihilate(ev)) return *r;
+
     const std::uint32_t e = ev.elements[0];
     const std::uint32_t lv = elements_[e].prev, rv = elements_[e].next;
     const std::uint32_t a = vertices_[lv].left, c = vertices_[rv].right;
     const bool lshock = vertices_[lv].type == VertexType::shock;
     const bool rshock = vertices_[rv].type == VertexType::shock;
+    if (a == c)
+        return make_error(ErrorCode::numerical_failure, "EV-08",
+                          "the vertices of a vanishing loop do not meet near " + point_text(ev.p, ev.t), 0);
 
-    const std::uint32_t wv = elements_[c].next;
-    if (vertices_[wv].right == a) {
-        if (!lshock || !rshock)
-            return unsupported("EV-08", "a three-element loop collapsing through a regular vertex", ev.p, ev.t, "M5");
-        const auto pw = position(wv, ev.t);
-        if (!pw || dist(*pw, ev.p) > annihilation_slack)
-            return make_error(ErrorCode::numerical_failure, "EV-08",
-                              "the vertices of a vanishing loop do not meet near " + point_text(ev.p, ev.t), 0);
-        const bool wshock = vertices_[wv].type == VertexType::shock;
-        const std::uint32_t mv =
-            add_mat_vertex(ev.p, ev.t, wshock ? VertexKind::junction : VertexKind::extremum_max, {a, e, c});
-        for (std::uint32_t v : {lv, rv, wv}) {
-            close_edge(v, mv, ev.p, ev.t);
-            vertices_[v].alive = false;
-        }
-        for (std::uint32_t x : {a, e, c}) {
-            elements_[x].alive = false;
-            ++elements_[x].version;
-        }
-        ++stats.annihilations;
-        return {};
-    }
-
-    const std::uint32_t mv =
-        add_mat_vertex(ev.p, ev.t, lshock && rshock ? VertexKind::junction : VertexKind::transition, {a, e, c});
+    VertexKind kind = VertexKind::junction;
+    if (!lshock && !rshock)
+        kind = VertexKind::curvature_end;
+    else if (!lshock || !rshock)
+        kind = VertexKind::transition;
+    const std::uint32_t mv = kind == VertexKind::curvature_end ? add_mat_vertex(ev.p, ev.t, kind, {a, c})
+                                                                : add_mat_vertex(ev.p, ev.t, kind, {a, e, c});
     close_edge(lv, mv, ev.p, ev.t);
     close_edge(rv, mv, ev.p, ev.t);
     vertices_[lv].alive = vertices_[rv].alive = false;
@@ -529,7 +631,9 @@ Result<void> Engine::handle_collapse(const Event& ev)
     elements_[c].prev = *v;
     ++elements_[a].version;
     ++elements_[c].version;
-    ++(lshock && rshock ? stats.collapses : stats.transitions);
+    ++(kind == VertexKind::junction ? stats.collapses
+       : kind == VertexKind::transition ? stats.transitions
+                                        : stats.curvature_ends);
 
     reschedule_element(a);
     reschedule_element(c);
@@ -537,13 +641,17 @@ Result<void> Engine::handle_collapse(const Event& ev)
     return {};
 }
 
-// [EV-04] Shock A|B reaches element C: C splits into C1, C2; new shocks A|C2 and C1|B; the loop
-// splits in two [EV-09].
+// [EV-04] Shock (or regular vertex) A|B reaches element C: C splits into C1, C2; new shocks A|C2
+// and C1|B; the loop splits in two [EV-09].
 Result<void> Engine::handle_split(const Event& ev)
 {
     const std::uint32_t v = ev.vertex, c = ev.elements[0];
     const std::uint32_t a = vertices_[v].left, b = vertices_[v].right;
-    const std::uint32_t mv = add_mat_vertex(ev.p, ev.t, VertexKind::junction, {a, b, c});
+    // A shock ends here: a junction. A regular vertex traced nothing: the two new edges both start
+    // here, at a minimum of r.
+    const bool shock = vertices_[v].type == VertexType::shock;
+    const std::uint32_t mv =
+        add_mat_vertex(ev.p, ev.t, shock ? VertexKind::junction : VertexKind::extremum_min, {a, b, c});
     close_edge(v, mv, ev.p, ev.t);
     vertices_[v].alive = false;
 

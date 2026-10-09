@@ -93,7 +93,7 @@ private:
     // Construction.
     SiteId add_site(const Site& s, std::uint32_t segment, bool corner);
     std::uint32_t add_element(SiteId site, std::uint32_t loop);
-    std::uint32_t add_mat_vertex(Vec2 p, double t, VertexKind kind, std::initializer_list<std::uint32_t> elements);
+    std::uint32_t add_mat_vertex(Vec2 p, double t, VertexKind kind, const std::vector<std::uint32_t>& elements);
     Result<std::uint32_t> add_shock(std::uint32_t left, std::uint32_t right, Vec2 p, double t, std::uint32_t mat_vertex,
                                     std::optional<Vec2> direction = std::nullopt);
     void close_edge(std::uint32_t vertex, std::uint32_t mat_vertex, Vec2 p, double t);
@@ -102,6 +102,7 @@ private:
     // [EV-10], [EV-11] Scheduling; all pairs within a loop [EV-12].
     void schedule_collapse(std::uint32_t e);
     void schedule_split(std::uint32_t v, std::uint32_t c);
+    void schedule_regular_split(std::uint32_t g, std::uint32_t c);
     void schedule_contact(std::uint32_t x, std::uint32_t y);
     void reschedule_element(std::uint32_t e);
     void reschedule_vertex(std::uint32_t v);
@@ -110,6 +111,7 @@ private:
     // [EV-13] Pop-time validity, [RB-02] cluster detection, and the handlers.
     bool valid(const Event& ev) const;
     Result<void> check_cluster(const Event& ev);
+    std::optional<Result<void>> annihilate(const Event& ev);
     Result<void> handle_collapse(const Event& ev);
     Result<void> handle_split(const Event& ev);
     Result<void> handle_contact(const Event& ev);

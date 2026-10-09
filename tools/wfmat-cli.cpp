@@ -65,10 +65,10 @@ int main(int argc, char** argv)
     auto mat = wfmat::compute_mat(*region);
     if (mat) {
         const auto& st = mat->stats();
-        std::printf("MAT: %zu vertices, %zu edges; events: %zu collapses, %zu transitions, %zu splits, %zu contacts, "
-                    "%zu loops vanished\n",
-                    mat->vertices().size(), mat->edges().size(), st.collapses, st.transitions, st.splits, st.contacts,
-                    st.annihilations);
+        std::printf("MAT: %zu vertices, %zu edges; events: %zu collapses, %zu transitions, %zu curvature ends, "
+                    "%zu splits, %zu contacts, %zu loops vanished\n",
+                    mat->vertices().size(), mat->edges().size(), st.collapses, st.transitions, st.curvature_ends,
+                    st.splits, st.contacts, st.annihilations);
     } else if (mat.error().code == wfmat::ErrorCode::unsupported) {
         std::printf("MAT: not computed yet: %s\n", wfmat::to_string(mat.error()).c_str());
     } else {
