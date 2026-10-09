@@ -24,6 +24,7 @@ else()
             URL https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz
             URL_HASH SHA256=2e64e5d79a738d0fa6fb546c6e5c2bd28f88d268a2a080546f74e5ff98f29d0e
             DOWNLOAD_EXTRACT_TIMESTAMP ON
+            SYSTEM
             EXCLUDE_FROM_ALL)
         FetchContent_MakeAvailable(Boost)
     endif()
@@ -47,6 +48,7 @@ if(NOT TARGET nlohmann_json::nlohmann_json)
         URL https://github.com/nlohmann/json/releases/download/v3.11.3/json.tar.xz
         URL_HASH SHA256=d6c65aca6b1ed68e7a182f4757257b107ae403032760ed6ef121c9d55e81757d
         DOWNLOAD_EXTRACT_TIMESTAMP ON
+        SYSTEM
         EXCLUDE_FROM_ALL)
     FetchContent_MakeAvailable(nlohmann_json)
 endif()
@@ -60,6 +62,7 @@ if(WFMAT_BUILD_TESTS)
             GIT_REPOSITORY https://github.com/catchorg/Catch2.git
             GIT_TAG v3.5.4
             GIT_SHALLOW ON
+            SYSTEM
             EXCLUDE_FROM_ALL)
         FetchContent_MakeAvailable(Catch2)
         list(APPEND CMAKE_MODULE_PATH "${catch2_SOURCE_DIR}/extras")
