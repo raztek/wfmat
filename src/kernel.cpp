@@ -46,6 +46,14 @@ Equation equation(const Site& s)
 
 int sign(double v) { return (v > 0.0) - (v < 0.0); }
 
+// Allowed |d(p) - t| for an accepted point: eps_geom, plus the rounding error of evaluating the
+// distance to a circle, which grows with its radius (a nearly flat fillet can have R = 10^6).
+double residual_slack(const Site& s, Vec2 p, const Tolerances& tol)
+{
+    if (s.is_line()) return tol.geom;
+    return tol.geom + 8.0 * std::numeric_limits<double>::epsilon() * (s.R + dist(p, s.centre));
+}
+
 // Newton on F_i(x, y, t) = d_i(x, y) - t, i = 1..3, in arithmetic T.
 template <class T>
 struct Newton {
@@ -223,7 +231,19 @@ Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, co
     // Candidate (x, y, t) with the condition of its algebraic solve.
     std::vector<std::pair<Vec3, double>> candidates;
 
-    const auto pivot = std::find_if(eq.begin(), eq.end(), [](const Equation& e) { return e.quadratic; });
+    // The pivot is the circle with the smallest coefficients: subtracting it from a nearly flat arc
+    // (huge centre and radius) leaves a well-scaled plane, while pivoting on the flat arc would put
+    // its cancellation into the quadratic.
+    auto pivot = eq.end();
+    double pivot_size = std::numeric_limits<double>::infinity();
+    for (std::size_t i = 0; i < 3; ++i) {
+        if (!eq[i].quadratic) continue;
+        const double size = dot(sites[i].centre, sites[i].centre) + sites[i].R * sites[i].R;
+        if (size < pivot_size) {
+            pivot = eq.begin() + static_cast<std::ptrdiff_t>(i);
+            pivot_size = size;
+        }
+    }
     if (pivot == eq.end()) {
         // Three lines: a unique solution unless two are parallel.
         const Vec3 &a0 = eq[0].a, &a1 = eq[1].a, &a2 = eq[2].a;
@@ -303,7 +323,7 @@ Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, co
         bool ok = true;
         for (const Site& s : sites) {
             if (!s.is_line() && s.offset_radius(r.t) < -tol.geom) ok = false;
-            if (std::abs(s.distance(r.p) - r.t) > tol.geom) ok = false;
+            if (std::abs(s.distance(r.p) - r.t) > residual_slack(s, r.p, tol)) ok = false;
         }
         if (!ok) continue;
         const bool duplicate = std::any_of(out.roots.begin(), out.roots.end(), [&](const Root3& q) {
@@ -356,8 +376,12 @@ std::vector<Vec2> offset_intersections(const Site& a, const Site& b, double t)
         if (d == 0.0) return out;
         const double slack = 1e-14 * std::max(1.0, ra + rb);
         if (d > ra + rb + slack || d < std::abs(ra - rb) - slack) return out;
-        const double along = (d * d + ra * ra - rb * rb) / (2.0 * d);
-        const double h = std::sqrt(std::max(0.0, ra * ra - along * along));
+        // ra - along = (rb - (d - ra)) (rb + (d - ra)) / 2d avoids the cancellation in
+        // ra^2 - along^2 when ra is large (a nearly flat arc).
+        const double gap = d - ra;
+        const double short_by = (rb - gap) * (rb + gap) / (2.0 * d);
+        const double along = ra - short_by;
+        const double h = std::sqrt(std::max(0.0, short_by * (ra + along)));
         const Vec2 base = a.centre + (along / d) * e;
         out.push_back(base - (h / d) * perp(e));
         if (h > 0.0) out.push_back(base + (h / d) * perp(e));
@@ -408,11 +432,12 @@ std::optional<double> regular_hit_time(Vec2 q0, Vec2 m, const Site& s, double t_
         const Vec2 v = q0 - s.centre;
         const double den = 2.0 * (dot(v, m) + s.sigma * s.R);
         if (std::abs(den) <= 1e-15) return std::nullopt;
-        t = (s.R * s.R - dot(v, v)) / den;
+        const double nv = norm(v);
+        t = (s.R - nv) * (s.R + nv) / den;
         if (s.offset_radius(t) < -tol.geom) return std::nullopt;
     }
     if (t < t_now - tol.time) return std::nullopt;
-    if (std::abs(s.distance(q0 + t * m) - t) > tol.geom) return std::nullopt;
+    if (std::abs(s.distance(q0 + t * m) - t) > residual_slack(s, q0 + t * m, tol)) return std::nullopt;
     return t;
 }
 
@@ -495,7 +520,9 @@ std::vector<Contact> contacts(const Site& a, const Site& b, double t_now, const 
         // The fronts must approach each other: opposed normals at the meeting point.
         const Vec2 ga = a.gradient(p), gb = b.gradient(p);
         if (ga == Vec2{} || gb == Vec2{} || dot(ga, gb) > -1.0 + 1e-9) continue;
-        if (std::abs(a.distance(p) - t) > tol.geom || std::abs(b.distance(p) - t) > tol.geom) continue;
+        if (std::abs(a.distance(p) - t) > residual_slack(a, p, tol) ||
+            std::abs(b.distance(p) - t) > residual_slack(b, p, tol))
+            continue;
         const bool duplicate = std::any_of(out.begin(), out.end(), [&](const Contact& q) {
             return dist(q.p, p) <= tol.geom && std::abs(q.t - t) <= tol.time;
         });

@@ -94,6 +94,7 @@ private:
 struct RunStats {
     std::size_t collapses = 0;          // E1a, shock + shock [EV-01]
     std::size_t transitions = 0;        // E1b, shock + regular [EV-02]
+    std::size_t curvature_ends = 0;     // E1c, a convex arc shrinks to its centre [EV-03]
     std::size_t splits = 0;             // E2 [EV-04]
     std::size_t contacts = 0;           // E3 [EV-05]
     std::size_t annihilations = 0;      // loops that vanished [EV-08]

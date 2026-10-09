@@ -19,10 +19,14 @@ Each approved spec version is tagged `spec-vX.Y`.
   E1a (collapse), E1b (transition), E2 (split) and E3 (contact), all-pairs scheduling, and the MAT
   as an embedded graph (`wfmat/mat.hpp`, `compute_mat`). It matches Boost.Polygon's Voronoi
   diagram on 10^4 random polygons in the test suite.
+- M3 (arcs): convex and concave arc sites, tangent joins, E1c (a convex arc shrinking to its
+  centre, a curvature end), and loops of two elements. 10^4 random filleted polygons and arc
+  chains pass the property checks, and a sampled Voronoi oracle (Boost.Polygon on the boundary
+  flattened to fine polylines) converges to the computed axis.
 
-Not yet handled, and refused with `ErrorCode::unsupported`: circular arcs and tangent joins (M3),
-and simultaneous events such as the four corners of a square meeting at its centre, or the plateau
-of a rectangle (M5). See section 13 of the spec.
+Not yet handled, and refused with `ErrorCode::unsupported`: simultaneous events such as the four
+corners of a square meeting at its centre, and plateaus such as those of a rectangle or a slot
+(M5). See section 13 of the spec.
 
 ## Building
 
@@ -68,8 +72,10 @@ fast-math [LIB-03].
 Every test names the spec requirements it verifies as Catch2 tags, for example `[IN-04]`, so
 `./build/tests/wfmat_tests "[IN-04]"` runs the tests for one requirement.
 
-The Voronoi comparison runs on 10^4 random polygons (about 30 s in a release build);
-`WFMAT_RANDOM_POLYGONS=500` sets a smaller count for quick local runs.
+The Voronoi comparison runs on 10^4 random polygons, and the property checks on 10^4 random
+shapes with arcs (about 30 s each in a release build); `WFMAT_RANDOM_POLYGONS=500` and
+`WFMAT_RANDOM_SHAPES=500` set smaller counts for quick local runs. With `WFMAT_DUMP=1` the arc
+test writes every failing shape to `build/tests/output/` as JSON, for `wfmat-cli`.
 
 ## Licence
 

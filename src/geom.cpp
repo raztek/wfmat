@@ -191,10 +191,16 @@ Intersections intersect(const Segment& s, const Segment& t, double eps)
         return out;
     }
     if (dcc > s.R + t.R + eps || dcc < std::abs(s.R - t.R) - eps) return out;
-    const double along = (dcc * dcc + s.R * s.R - t.R * t.R) / (2.0 * dcc);
-    const double h = std::sqrt(std::max(0.0, s.R * s.R - along * along));
-    const Vec2 base = s.c + (along / dcc) * e;
-    const Vec2 off = (h / dcc) * perp(e);
+    // Work from the smaller circle: along = (d^2 - R_big^2 + R_small^2) / 2d with d^2 - R_big^2
+    // factored, so a nearly flat arc (huge R) loses no digits.
+    const bool s_small = s.R <= t.R;
+    const Segment& small = s_small ? s : t;
+    const Segment& big = s_small ? t : s;
+    const Vec2 u = (s_small ? -1.0 : 1.0) * e / dcc;  // from the big centre towards the small one
+    const double along = ((dcc - big.R) * (dcc + big.R) + small.R * small.R) / (2.0 * dcc);
+    const double h = std::sqrt(std::max(0.0, (small.R - along) * (small.R + along)));
+    const Vec2 base = small.c - along * u;
+    const Vec2 off = h * perp(u);
     add_if_on_both(base + off);
     add_if_on_both(base - off);
     return out;
