@@ -199,8 +199,17 @@ inline std::string compare_with_voronoi(const std::vector<IPoint>& polygon, cons
         std::set_difference(mine.begin(), mine.end(), bedges.begin(), bedges.end(), std::back_inserter(only_mine));
         std::set_difference(bedges.begin(), bedges.end(), mine.begin(), mine.end(), std::back_inserter(only_boost));
         auto text = [&](const std::pair<std::size_t, std::size_t>& e) {
-            return "(" + std::to_string(bverts[e.first].x()) + ", " + std::to_string(bverts[e.first].y()) + ")-(" +
-                   std::to_string(bverts[e.second].x()) + ", " + std::to_string(bverts[e.second].y()) + ")";
+            // Appended piecewise: GCC 12.3 reports a false -Wrestrict for "(" + std::string&&.
+            std::string s = "(";
+            s += std::to_string(bverts[e.first].x());
+            s += ", ";
+            s += std::to_string(bverts[e.first].y());
+            s += ")-(";
+            s += std::to_string(bverts[e.second].x());
+            s += ", ";
+            s += std::to_string(bverts[e.second].y());
+            s += ")";
+            return s;
         };
         return "edge sets differ: " + std::to_string(mine.size()) + " edges vs Voronoi " + std::to_string(bedges.size()) +
                (only_mine.empty() ? "" : "; only ours " + text(only_mine.front())) +
