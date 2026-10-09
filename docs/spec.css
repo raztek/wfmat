@@ -1,0 +1,20 @@
+
+body { font-family: "DejaVu Serif", Georgia, serif; font-size: 10.5pt; line-height: 1.45; color: #1a1a1a; max-width: none; margin: 0; }
+header#title-block-header { margin-bottom: 18pt; border-bottom: 1px solid #ccc; padding-bottom: 8pt; }
+h1.title { font-size: 22pt; margin: 0 0 4pt 0; font-weight: 600; }
+p.subtitle { font-size: 10pt; color: #555; margin: 0; font-style: normal; }
+h2 { font-size: 14.5pt; margin: 18pt 0 6pt; font-weight: 600; break-after: avoid; }
+p { margin: 5pt 0; text-align: justify; hyphens: auto; }
+ul, ol { margin: 4pt 0 4pt 0; padding-left: 20pt; } li { margin: 2pt 0; }
+table { border-collapse: collapse; width: 100%; margin: 8pt 0; font-size: 9.2pt; }
+tr { break-inside: avoid; } thead { display: table-header-group; }
+th, td { border: 1px solid #c8c8c8; padding: 3pt 5pt; vertical-align: top; text-align: left; }
+th { background: #f1f1ef; font-weight: 600; }
+code { font-family: "DejaVu Sans Mono", monospace; font-size: 8.8pt; }
+pre { background: #f6f6f4; border: 1px solid #e0e0dc; border-radius: 4px; padding: 6pt 8pt; font-size: 7.6pt; line-height: 1.35; white-space: pre; overflow: hidden; }
+pre code { font-size: 7.6pt; }
+math[display="block"] { margin: 6pt 0; font-size: 1.05em; }
+math { font-family: "Latin Modern Math", "STIX Two Math", "DejaVu Math TeX Gyre", serif; }
+figure { margin: 10pt 0; text-align: center; break-inside: avoid; } figure img { width: 100%; }
+figcaption { font-size: 8.5pt; color: #666; }
+pre > code.sourceCode > span { text-indent: 0 !important; padding-left: 0 !important; } div.sourceCode { margin: 6pt 0; } pre.sourceCode { margin: 0; }

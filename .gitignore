@@ -1,0 +1,11 @@
+/build*/
+/out/
+/.vs/
+/.vscode/
+/.idea/
+/CMakeUserPresets.json
+/vcpkg_installed/
+docs/node_modules/
+docs/package.json
+docs/package-lock.json
+docs/spec.html
