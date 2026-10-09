@@ -6,11 +6,16 @@
 #include <cstdint>
 #include <optional>
 #include <queue>
+#include <string>
+#include <utility>
 #include <vector>
 
 #include "wfmat/mat.hpp"
 
 namespace wfmat::detail {
+
+// "(x, y) at t = ..." for diagnostics, in the unit frame.
+std::string point_text(Vec2 p, double t);
 
 // [ALG-02] Front vertices and elements, addressed by stable 32-bit ids that are never reused.
 enum class VertexType : std::uint8_t { shock, regular };
@@ -42,6 +47,7 @@ struct Event {
     std::uint32_t key = 0;   // smallest involved element id [RB-01]
     std::uint64_t seq = 0;   // insertion order: the final, deterministic tie-break
     Vec2 p;
+    Vec2 q;  // plateau: the end of the overlap; p is its start along the front of elements[0]
     std::array<std::uint32_t, 2> elements{no_id, no_id};
     std::array<std::uint32_t, 2> versions{0, 0};
     std::uint32_t vertex = no_id;  // split: the shock that reaches elements[0]
@@ -94,6 +100,7 @@ private:
     SiteId add_site(const Site& s, std::uint32_t segment, bool corner);
     std::uint32_t add_element(SiteId site, std::uint32_t loop);
     std::uint32_t add_mat_vertex(Vec2 p, double t, VertexKind kind, const std::vector<std::uint32_t>& elements);
+    std::uint32_t add_mat_vertex_at_sites(Vec2 p, double t, VertexKind kind, const std::vector<SiteId>& contacts);
     Result<std::uint32_t> add_shock(std::uint32_t left, std::uint32_t right, Vec2 p, double t, std::uint32_t mat_vertex,
                                     std::optional<Vec2> direction = std::nullopt);
     void close_edge(std::uint32_t vertex, std::uint32_t mat_vertex, Vec2 p, double t);
@@ -104,13 +111,18 @@ private:
     void schedule_split(std::uint32_t v, std::uint32_t c);
     void schedule_regular_split(std::uint32_t g, std::uint32_t c);
     void schedule_contact(std::uint32_t x, std::uint32_t y);
+    std::optional<std::pair<Vec2, Vec2>> plateau_ends(std::uint32_t x, std::uint32_t y, const Contact& k) const;
     void reschedule_element(std::uint32_t e);
     void reschedule_vertex(std::uint32_t v);
     void push(Event ev);
 
-    // [EV-13] Pop-time validity, [RB-02] cluster detection, and the handlers.
+    // [EV-13] Pop-time validity, [RB-02] cluster formation, and the handlers.
     bool valid(const Event& ev) const;
-    Result<void> check_cluster(const Event& ev);
+    double cluster_radius() const { return 10.0 * tol_.geom; }
+    double plateau_distance(const Event& plateau, Vec2 x) const;
+    double event_gap(const Event& a, const Event& b) const;
+    std::vector<Event> gather_cluster(const Event& ev);
+    Result<void> resolve_cluster(const std::vector<Event>& cluster);
     std::optional<Result<void>> annihilate(const Event& ev);
     Result<void> handle_collapse(const Event& ev);
     Result<void> handle_split(const Event& ev);
@@ -120,6 +132,7 @@ private:
     const PreparedRegion& region_;
     Tolerances tol_;
     bool debug_ = false;
+    bool resolve_all_ = false;
     double t_now_ = 0.0;
     std::uint32_t next_loop_ = 1;
     std::uint64_t seq_ = 0;

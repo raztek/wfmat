@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 1.2 · 9 October 2026 · michael"
-version: "1.2"
+subtitle: "Version 1.3 · 9 October 2026 · michael"
+version: "1.3"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 1.3 | 2026-10-09 | minor revision | EV-04: a circle front can also reach a regular vertex; RB-02, RB-03: cluster radius, port ordering and vertex kinds as implemented in M5; RB-04 and API: `resolve_all_events` option for the cross-check |
 | 1.2 | 2026-10-09 | minor revision | API-03: error code `unsupported` for valid input that a later milestone handles |
 | 1.1 | 2026-10-09 | minor revision | VER-01 and M1: kernel fixtures generated with SymPy instead of Maple |
 | 1.0 | 2026-10-09 | approved baseline | content of 0.2 approved by michael as the implementation baseline; sources moved to `docs/` in the wfmat repository, which is now the master copy; tagged `spec-v1.0` |
@@ -188,7 +189,7 @@ Three generic event types produce every MAT vertex: a local collapse, a non-loca
 | **[EV-01]** E1a collapse, shock + shock | element $B$ between $A\mid B$ and $B\mid C$ shrinks to a point | 3-site solve $(A,B,C)$ | junction, 3 contacts | remove $B$; new vertex $A\mid C$ |
 | **[EV-02]** E1b collapse, shock + regular | shock $A\mid B$ reaches the junction of $B$ with its tangent or reflex neighbour $C$ | bisector $(A,B)$ meets the junction's normal ray | transition | remove $B$; shock continues as $A\mid C$, edge changes conic |
 | **[EV-03]** E1c collapse, regular + regular | convex arc $B$ shrinks to its centre ($t = R$) | closed form | curvature end | remove $B$; new shock $A\mid C$, edge born with $r = R$ |
-| **[EV-04]** E2 split | shock $A\mid B$ reaches the interior of a non-adjacent element $C$ | 3-site solve $(A,B,C)$ | junction, 3 contacts | split $C$ into $C_1, C_2$; new shocks $A\mid C_2$ and $C_1\mid B$; split the loop |
+| **[EV-04]** E2 split | shock $A\mid B$ reaches the interior of a non-adjacent element $C$; with circle fronts, $C$ can also reach a regular vertex $A\mid B$ inside its live part | 3-site solve $(A,B,C)$; for a regular vertex, the hit time of [KN-04] | junction, 3 contacts; extremum (min of $r$) for a regular vertex, which traces no edge | split $C$ into $C_1, C_2$; new shocks $A\mid C_2$ and $C_1\mid B$; split the loop |
 | **[EV-05]** E3 contact | non-adjacent elements $A$ and $C$ become tangent | common normal; $t$ = half the gap | extremum (min of $r$) | split $A$ and $C$; two new shocks moving apart; split the loop |
 
 **Rules shared by all handlers**
@@ -259,18 +260,18 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 
 **[RB-01] Event ordering.** The queue orders by $(t,\ \text{kind},\ \text{smallest involved id})$. Ties are therefore deterministic, and no hash-ordered container is ever iterated on a path that affects output.
 
-**[RB-02] Cluster formation.** When an event is popped at $(t^*, p^*)$, every other valid event with $\lvert t - t^*\rvert \le \varepsilon_t$ whose point lies within $\varepsilon_{\text{geom}}$ of a point already in the cluster joins it (union-find over event points). A plateau contributes its whole overlap segment or arc instead of a point.
+**[RB-02] Cluster formation.** When an event is popped at $(t^*, p^*)$, every other valid event with $\lvert t - t^*\rvert \le \varepsilon_t$ whose point lies within the cluster radius $\rho = 10\,\varepsilon_{\text{geom}}$ of a point already in the cluster joins it (a breadth-first search over a grid of cells of size $\rho$, linear in the number of events). A plateau contributes its whole overlap segment or arc instead of a point. Repeats of one event are dropped; a cluster of one event goes to its simple handler.
 
 **[RB-03] Cluster resolution**
 
-1. Region. Take the cluster's points, or plateau segment, and grow it by $\varepsilon_{\text{geom}}$ into a small region $D$.
+1. Region. Take the cluster's points, or plateau segment, and grow it by $\rho$ into a small region $D$. Its anchors are the mean of the event points, or the two ends of the plateau.
 2. Kill. Every element whose live part at $t^*$ lies inside $D$ dies. Every shock with its position in $D$ dies and closes its MAT edge at the cluster vertex.
 3. Chains. The surviving front near $D$ falls into $k$ chains; each enters $D$ through a last surviving element $e_{\text{in}}$ and leaves through a first surviving element $e_{\text{out}}$.
-4. Relink. Sort the chains by the angle of their entry points around $D$ in front orientation, and link $e_{\text{in}}$ of each chain to $e_{\text{out}}$ of the next. Each link is a new vertex, shock or regular by the corner rule, and a shock opens a new MAT edge.
-5. Emit. One MAT vertex at the mean of the event points with $r = t^*$, its contacts the union of all involved sites. For a plateau, one vertex at each end and a constant-radius edge between them.
+4. Relink. Sort the ports ($e_{\text{in}}$ and $e_{\text{out}}$ of every chain) counter-clockwise around $D$ by the direction in which their front leaves the anchor, and fronts tangent there by their curvature. The region near $D$ lies counter-clockwise of an $e_{\text{out}}$ and clockwise of an $e_{\text{in}}$, so each $e_{\text{in}}$ links to the $e_{\text{out}}$ just before it. Each link is a new vertex, shock or regular by the corner rule, and a shock opens a new MAT edge moving into the sector between the two.
+5. Emit. One MAT vertex at each anchor with $r = t^*$, its contacts the union of the sites touching it; for a plateau, a constant-radius edge joins the two. The vertex kind follows from its degree: three or more edges make a junction; two make a maximum (two shocks ending), a minimum (two starting) or a transition (one of each, or a plateau and one shock); one or none make a curvature end.
 6. Rebuild loops by walking the relinked lists: $k = 0$ annihilates a loop.
 
-**[RB-04]** The simple handlers in section 6 are the special cases $k = 1$ (collapse) and $k = 2$ (split, contact); in debug builds they are cross-checked against this procedure.
+**[RB-04]** The simple handlers in section 6 are the special cases $k = 1$ (collapse) and $k = 2$ (split, contact); they are cross-checked against this procedure by a debug option, `Options::resolve_all_events`, that sends every event through it, and the test suite requires the same axis either way.
 
 **Typical clusters**
 
@@ -331,6 +332,7 @@ struct Options {
     Tolerances tol;
     BroadPhase broad_phase = BroadPhase::windowed_rtree;
     bool       debug_checks = false;                   // full invariants after every event
+    bool       resolve_all_events = false;             // [RB-04] every event through cluster resolution
 };
 
 enum class VertexKind { corner, curvature_end, junction, transition, extremum_min, extremum_max };

@@ -26,14 +26,26 @@ Vec2 MatEdge::unit_point(double t) const
     return t - d_.t0 < d_.t1 - t ? d_.p0 : d_.p1;
 }
 
+// [OUT-02] A plateau edge is a segment, or an arc about the common centre of its two sites.
+Vec2 MatEdge::plateau_point(double u) const
+{
+    if (d_.kind == ConicKind::plateau_line) return d_.p0 + u * (d_.p1 - d_.p0);
+    const Vec2 c = d_.a.centre;
+    const double a0 = std::atan2(d_.p0.y - c.y, d_.p0.x - c.x);
+    const double a1 = std::atan2(d_.p1.y - c.y, d_.p1.x - c.x);
+    const double sweep = d_.branch * wrap_2pi(d_.branch * (a1 - a0));
+    return c + dist(d_.p0, c) * polar(a0 + u * sweep);
+}
+
 Vec2 MatEdge::point(double r) const
 {
+    if (is_plateau()) return d_.xf.from_unit(d_.p0);
     return d_.xf.from_unit(unit_point(d_.xf.length_to_unit(r)));
 }
 
 Vec2 MatEdge::point_at(double u) const
 {
-    return d_.xf.from_unit(unit_point(t_at(u)));
+    return d_.xf.from_unit(unit_point_at(u));
 }
 
 double MatEdge::radius_at(double u) const
@@ -43,6 +55,8 @@ double MatEdge::radius_at(double u) const
 
 Vec2 MatEdge::tangent_at(double u) const
 {
+    if (d_.kind == ConicKind::plateau_line) return unit(d_.p1 - d_.p0);
+    if (d_.kind == ConicKind::plateau_arc) return d_.branch * unit(perp(plateau_point(u) - d_.a.centre));
     const Vec2 p = unit_point(t_at(u));
     if (auto v = shock_velocity(d_.a, d_.b, p)) return unit(*v);
     const double h = 1e-6;
@@ -52,7 +66,7 @@ Vec2 MatEdge::tangent_at(double u) const
 std::pair<Vec2, Vec2> MatEdge::feet_at(double u) const
 {
     const double t = t_at(u);
-    const Vec2 p = unit_point(t);
+    const Vec2 p = unit_point_at(u);
     return {d_.xf.from_unit(d_.a.foot(p, t)), d_.xf.from_unit(d_.b.foot(p, t))};
 }
 

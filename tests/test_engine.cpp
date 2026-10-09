@@ -149,25 +149,6 @@ TEST_CASE("Output is deterministic and independent of orientation and placement"
     }
 }
 
-TEST_CASE("Clusters and plateaus are refused until M5", "[M2][M3][API-03]")
-{
-    SECTION("a slot: a plateau between the arc centres") {
-        const auto mat = compute_mat(load("slot.json"));
-        REQUIRE_FALSE(mat.has_value());
-        CHECK(mat.error().code == ErrorCode::unsupported);
-    }
-    SECTION("a square: four collapses at the centre") {
-        const auto mat = compute_mat(polygon({{0, 0}, {1, 0}, {1, 1}, {0, 1}}));
-        REQUIRE_FALSE(mat.has_value());
-        CHECK(mat.error().code == ErrorCode::unsupported);
-    }
-    SECTION("a rectangle: a plateau") {
-        const auto mat = compute_mat(load("rectangle.json"));
-        REQUIRE_FALSE(mat.has_value());
-        CHECK(mat.error().code == ErrorCode::unsupported);
-    }
-}
-
 TEST_CASE("Random polygons match the Boost.Polygon Voronoi diagram", "[M2][VER-03][VER-05][EV-12]")
 {
     const int shapes = random_polygon_count();

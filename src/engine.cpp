@@ -26,20 +26,6 @@ constexpr double annihilation_slack = 1e-7;
 // fronts, where a rounding error delta in t moves them by about sqrt(delta R).
 constexpr double tangency_slack = 1e-5;
 
-std::string point_text(Vec2 p, double t)
-{
-    char buf[96];
-    std::snprintf(buf, sizeof buf, "(%.12g, %.12g) at t = %.12g", p.x, p.y, t);
-    return buf;
-}
-
-tl::unexpected<Error> unsupported(const char* requirement, const std::string& what, Vec2 p, double t,
-                                  const char* milestone)
-{
-    return make_error(ErrorCode::unsupported, requirement,
-                      what + " near " + point_text(p, t) + " (unit frame); handled from milestone " + milestone, 0);
-}
-
 // Unit tangent of the front of s at p in front order (the region on the left).
 Vec2 front_tangent(const Site& s, Vec2 p)
 {
@@ -49,11 +35,20 @@ Vec2 front_tangent(const Site& s, Vec2 p)
 
 } // namespace
 
+std::string point_text(Vec2 p, double t)
+{
+    char buf[96];
+    std::snprintf(buf, sizeof buf, "(%.12g, %.12g) at t = %.12g", p.x, p.y, t);
+    return buf;
+}
+
 Engine::Engine(const PreparedRegion& region, const Options& options)
-    : region_(region), tol_(options.tol), debug_(options.debug_checks)
+    : region_(region), tol_(options.tol), debug_(options.debug_checks), resolve_all_(options.resolve_all_events)
 {
 }
 
+// [ALG-04] The main loop: a single event goes to its handler in section 6, a cluster (or a plateau,
+// or any event when resolve_all_events is set) to the generic resolution of section 8.
 Result<void> Engine::run()
 {
     if (auto r = initialise(); !r) return r;
@@ -64,15 +59,17 @@ Result<void> Engine::run()
             ++stats.stale_events;
             continue;
         }
-        if (auto r = check_cluster(ev); !r) return r;
+        const std::vector<Event> cluster = gather_cluster(ev);
         t_now_ = std::max(t_now_, ev.t);
         Result<void> r;
-        switch (ev.kind) {
-        case EventKind::collapse: r = handle_collapse(ev); break;
-        case EventKind::split: r = handle_split(ev); break;
-        case EventKind::contact: r = handle_contact(ev); break;
-        case EventKind::plateau: r = unsupported("RB-04", "a plateau edge", ev.p, ev.t, "M5"); break;
-        }
+        if (cluster.size() > 1 || ev.kind == EventKind::plateau || resolve_all_)
+            r = resolve_cluster(cluster);
+        else if (ev.kind == EventKind::collapse)
+            r = handle_collapse(ev);
+        else if (ev.kind == EventKind::split)
+            r = handle_split(ev);
+        else
+            r = handle_contact(ev);
         if (!r) return r;
         if (debug_)
             if (auto c = check_invariants(); !c) return c;
@@ -222,10 +219,17 @@ std::uint32_t Engine::add_element(SiteId s, std::uint32_t loop)
 
 std::uint32_t Engine::add_mat_vertex(Vec2 p, double t, VertexKind kind, const std::vector<std::uint32_t>& elements)
 {
+    std::vector<SiteId> contacts;
+    for (std::uint32_t e : elements) contacts.push_back(elements_[e].site);
+    return add_mat_vertex_at_sites(p, t, kind, contacts);
+}
+
+std::uint32_t Engine::add_mat_vertex_at_sites(Vec2 p, double t, VertexKind kind, const std::vector<SiteId>& contacts)
+{
     OutVertex v{p, t, kind, {}};
-    for (std::uint32_t e : elements) {
-        const Site& s = site(e);
-        v.contacts.push_back({elements_[e].site, s.foot(p, t)});
+    for (SiteId id : contacts) {
+        const Site& s = sites[id];
+        v.contacts.push_back({id, s.foot(p, t)});
         stats.max_residual = std::max(stats.max_residual, std::abs(s.distance(p) - t));
     }
     mat_vertices.push_back(std::move(v));
@@ -240,11 +244,14 @@ Result<std::uint32_t> Engine::add_shock(std::uint32_t left, std::uint32_t right,
 {
     const Site &a = site(left), &b = site(right);
     if (a.is_line() && b.is_line() && std::abs(cross(a.n, b.n)) <= tol_.ang)
-        return unsupported("RB-04", "a shock between parallel lines (a plateau)", p, t, "M5");
+        return make_error(ErrorCode::numerical_failure, "RB-02",
+                          "a shock between parallel lines outside a plateau cluster near " + point_text(p, t), 0);
     int branch = 0;
     if (!(a.is_line() && b.is_line())) {
         branch = direction ? branch_of(a, b, p + branch_probe * *direction) : branch_of(a, b, p);
-        if (branch == 0) return unsupported("RB-02", "a shock born on its axis (simultaneous events)", p, t, "M5");
+        if (branch == 0)
+            return make_error(ErrorCode::numerical_failure, "RB-02",
+                              "a shock born on its axis outside a cluster near " + point_text(p, t), 0);
     }
 
     MatEdge::Data d;
@@ -430,6 +437,41 @@ void Engine::schedule_regular_split(std::uint32_t g, std::uint32_t c)
     push(ev);
 }
 
+// [KN-05] The overlap of the live parts of x and y when their fronts coincide at k.t (antiparallel
+// lines or concentric arcs), from its start to its end along the front of x. None when shorter
+// than eps_geom.
+std::optional<std::pair<Vec2, Vec2>> Engine::plateau_ends(std::uint32_t x, std::uint32_t y, const Contact& k) const
+{
+    const FrontElement &ex = elements_[x], &ey = elements_[y];
+    const auto x0 = position(ex.prev, k.t), x1 = position(ex.next, k.t);
+    const auto y0 = position(ey.next, k.t), y1 = position(ey.prev, k.t);  // y runs the other way
+    if (!x0 || !x1 || !y0 || !y1) return std::nullopt;
+    const Site& s = site(x);
+    if (s.is_line()) {
+        const Vec2 tan{s.n.y, -s.n.x};
+        const double lo = std::max(dot(tan, *x0), dot(tan, *y0));
+        const double hi = std::min(dot(tan, *x1), dot(tan, *y1));
+        if (hi - lo <= tol_.geom) return std::nullopt;
+        const double base = dot(tan, k.p);
+        return std::pair{k.p + (lo - base) * tan, k.p + (hi - base) * tan};
+    }
+    // Angles about the common centre, increasing along the front of x.
+    const Vec2 c = s.centre;
+    const double rho = s.offset_radius(k.t);
+    auto angle = [&](Vec2 q) { return s.sigma * std::atan2(q.y - c.y, q.x - c.x); };
+    const double ax = angle(*x0);
+    const double sx = wrap_2pi(angle(*x1) - ax), sy = wrap_2pi(angle(*y1) - angle(*y0));
+    const double b = wrap_2pi(angle(*y0) - ax);
+    double lo = 0.0, hi = -1.0;
+    for (const double shift : {b, b - two_pi}) {
+        const double l = std::max(0.0, shift), h = std::min(sx, shift + sy);
+        if (h - l > hi - lo) lo = l, hi = h;
+    }
+    if (rho * (hi - lo) <= tol_.geom) return std::nullopt;
+    auto at = [&](double a) { return c + rho * polar(s.sigma * (ax + a)); };
+    return std::pair{at(lo), at(hi)};
+}
+
 // [EV-05], [KN-05] Two non-adjacent elements touch along a common normal.
 void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
 {
@@ -446,29 +488,12 @@ void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
         ev.elements = {x, y};
         ev.versions = {elements_[x].version, elements_[y].version};
         if (k.plateau) {
-            // Antiparallel lines or concentric arcs: report the plateau only when the live parts
-            // overlap at t*.
-            const Site& s = sites[sx];
-            if (!s.is_line()) {
-                std::optional<Vec2> shared;
-                for (auto [u, w] : {std::pair{x, y}, std::pair{y, x}})
-                    for (std::uint32_t v : {elements_[w].prev, elements_[w].next})
-                        if (const auto q = position(v, k.t); q && !shared && live(u, *q, k.t)) shared = q;
-                if (!shared) continue;
-                ev.kind = EventKind::plateau;
-                ev.p = *shared;
-                push(ev);
-                return;
-            }
-            const Vec2 tan{s.n.y, -s.n.x};
-            const auto x0 = position(elements_[x].prev, k.t), x1 = position(elements_[x].next, k.t);
-            const auto y0 = position(elements_[y].next, k.t), y1 = position(elements_[y].prev, k.t);
-            if (!x0 || !x1 || !y0 || !y1) continue;
-            const double lo = std::max(dot(tan, *x0), dot(tan, *y0));
-            const double hi = std::min(dot(tan, *x1), dot(tan, *y1));
-            if (hi - lo <= tol_.geom) continue;
+            // Antiparallel lines or concentric arcs: a plateau where their live parts overlap at t*.
+            const auto ends = plateau_ends(x, y, k);
+            if (!ends) continue;
             ev.kind = EventKind::plateau;
-            ev.p = k.p + (0.5 * (lo + hi) - dot(tan, k.p)) * tan;
+            ev.p = ends->first;
+            ev.q = ends->second;
             push(ev);
             return;
         }
@@ -516,42 +541,9 @@ bool Engine::valid(const Event& ev) const
     return true;
 }
 
-// [RB-02] Other valid events at the same time and place form a cluster with ev. Cluster
-// resolution arrives with M5; until then a cluster is reported, except the collapses of a
-// vanishing loop of two or three elements, which handle_collapse treats as one event.
-Result<void> Engine::check_cluster(const Event& ev)
-{
-    auto same = [](const Event& a, const Event& b) {
-        if (a.kind != b.kind || a.vertex != b.vertex) return false;
-        return (a.elements[0] == b.elements[0] && a.elements[1] == b.elements[1]) ||
-               (a.elements[0] == b.elements[1] && a.elements[1] == b.elements[0]);
-    };
-    const bool vanishing = ev.kind == EventKind::collapse && loop_size(ev.elements[0], 4) <= 3;
-
-    std::vector<Event> held;
-    bool cluster = false;
-    while (!queue_.empty() && queue_.top().t <= ev.t + tol_.time) {
-        const Event e = queue_.top();
-        queue_.pop();
-        if (!valid(e)) {
-            ++stats.stale_events;
-            continue;
-        }
-        held.push_back(e);
-        if (dist(e.p, ev.p) > tol_.geom || same(e, ev)) continue;
-        if (vanishing && e.kind == EventKind::collapse &&
-            elements_[e.elements[0]].loop == elements_[ev.elements[0]].loop)
-            continue;
-        cluster = true;
-    }
-    for (const Event& e : held) queue_.push(e);
-    if (cluster) return unsupported("RB-03", "simultaneous events (a cluster)", ev.p, ev.t, "M5");
-    return {};
-}
-
 // [EV-08] Every vertex of a loop of two or three elements meets at ev.p: the loop vanishes. The
 // MAT vertex closes the edges of its shocks: three make a junction, two a maximum of r, one the
-// centre of a convex arc (a curvature end), none a disk.
+// centre of a convex arc (a curvature end), none the centre of a disk (also a curvature end).
 std::optional<Result<void>> Engine::annihilate(const Event& ev)
 {
     const std::uint32_t e = ev.elements[0];
@@ -572,9 +564,6 @@ std::optional<Result<void>> Engine::annihilate(const Event& ev)
         if (p ? dist(*p, ev.p) > slack : loop.size() > 2) return std::nullopt;
         shocks += vertices_[v].type == VertexType::shock;
     }
-    if (loop.size() == 3 && shocks == 0)
-        return unsupported("EV-08", "a loop of three tangent arcs vanishing", ev.p, ev.t, "M5");
-
     const VertexKind kind = shocks == 3   ? VertexKind::junction
                             : shocks == 2 ? VertexKind::extremum_max
                                           : VertexKind::curvature_end;

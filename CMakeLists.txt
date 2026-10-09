@@ -22,6 +22,7 @@ endif()
 
 add_library(wfmat
     src/geom.cpp
+    src/cluster.cpp
     src/engine.cpp
     src/kernel.cpp
     src/mat.cpp

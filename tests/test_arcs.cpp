@@ -129,27 +129,6 @@ int random_shape_count()
     return 10'000;
 }
 
-// [VER-05] A random star polygon with every corner filleted (fraction 0 to 0.9 of the room).
-Region random_filleted(std::mt19937_64& rng, int n)
-{
-    const auto poly = random_star_polygon(rng, n);
-    std::vector<Vec2> p;
-    for (const IPoint& q : poly) p.push_back({double(q.first), double(q.second)});
-    std::uniform_real_distribution<double> f(0.05, 0.9);
-    std::vector<double> fraction(p.size());
-    for (double& x : fraction) x = f(rng);
-    return filleted(p, fraction);
-}
-
-// [VER-05] A random arc chain: a star polygon whose edges are arcs with random bulges.
-Region random_arc_chain(std::mt19937_64& rng, int n)
-{
-    Region region = to_region(random_star_polygon(rng, n));
-    std::uniform_real_distribution<double> b(-0.25, 0.25);
-    for (BulgeVertex& v : region.outer.vertices) v.bulge = b(rng);
-    return region;
-}
-
 } // namespace
 
 TEST_CASE("Random filleted polygons and arc chains pass the property checks", "[M3][VER-03][VER-04][VER-05]")

@@ -105,8 +105,9 @@ using IPoint = std::pair<std::int32_t, std::int32_t>;
 
 // [VER-03] Boost.Polygon's Voronoi diagram of the polygon's segments, restricted to the interior,
 // without secondary edges (the spokes from reflex corners), against our MAT with its E3 vertices
-// (minima of r inside a Voronoi edge) contracted. Vertices are matched by position within tol (in
-// caller units) and the edge sets must then agree. Returns an empty string on success.
+// (minima of r inside a Voronoi edge) contracted, and with coincident Voronoi vertices merged.
+// Vertices are matched by position within tol (in caller units) and the edge sets must then agree.
+// Returns an empty string on success.
 inline std::string compare_with_voronoi(const std::vector<IPoint>& polygon, const PreparedRegion& region,
                                         const MedialAxis& mat, double tol)
 {
@@ -151,19 +152,44 @@ inline std::string compare_with_voronoi(const std::vector<IPoint>& polygon, cons
         }
         if (!interior) continue;
         bedges.emplace_back(std::min(i0, i1), std::max(i0, i1));
-        ++bdegree[i0];
-        ++bdegree[i1];
     }
+    // A degenerate input (four or more sites on one circle) gives coincident Voronoi vertices
+    // joined by zero-length edges: merge them, as our cluster resolution does.
+    std::vector<std::size_t> rep(bverts.size());
+    std::iota(rep.begin(), rep.end(), std::size_t{0});
+    auto root = [&](std::size_t x) {
+        while (rep[x] != x) x = rep[x] = rep[rep[x]];
+        return x;
+    };
+    for (const auto& [i0, i1] : bedges)
+        if (dist({bverts[i0].x(), bverts[i0].y()}, {bverts[i1].x(), bverts[i1].y()}) <= tol) rep[root(i1)] = root(i0);
+    std::vector<std::pair<std::size_t, std::size_t>> merged;
+    for (const auto& [i0, i1] : bedges) {
+        const std::size_t r0 = root(i0), r1 = root(i1);
+        if (r0 == r1) continue;
+        merged.emplace_back(std::min(r0, r1), std::max(r0, r1));
+        ++bdegree[r0];
+        ++bdegree[r1];
+    }
+    bedges = std::move(merged);
     std::vector<std::size_t> bused;
     for (std::size_t i = 0; i < bverts.size(); ++i)
         if (bdegree[i] > 0) bused.push_back(i);
 
-    // Our graph with the E3 vertices contracted.
+    // Our graph with the E3 vertices contracted, except where a degenerate contact coincides with a
+    // Voronoi vertex (the contact at the end of an arc site, where the diagram changes sites).
     const auto verts = mat.vertices();
     const auto edges = mat.edges();
+    std::vector<char> contracted(verts.size(), 0);
+    for (std::size_t i = 0; i < verts.size(); ++i) {
+        if (verts[i].kind != VertexKind::extremum_min) continue;
+        contracted[i] = std::none_of(bused.begin(), bused.end(), [&](std::size_t j) {
+            return dist(verts[i].p, {bverts[j].x(), bverts[j].y()}) <= tol;
+        });
+    }
     std::vector<std::size_t> ours;
     for (std::size_t i = 0; i < verts.size(); ++i)
-        if (verts[i].kind != VertexKind::extremum_min) ours.push_back(i);
+        if (!contracted[i]) ours.push_back(i);
     if (ours.size() != bused.size())
         return "vertex count " + std::to_string(ours.size()) + " vs Voronoi " + std::to_string(bused.size());
 
@@ -194,11 +220,11 @@ inline std::string compare_with_voronoi(const std::vector<IPoint>& polygon, cons
     };
     for (std::size_t k = 0; k < edges.size(); ++k) {
         const std::size_t a = edges[k].v0(), b = edges[k].v1();
-        if (verts[a].kind == VertexKind::extremum_min || verts[b].kind == VertexKind::extremum_min) continue;
+        if (contracted[a] || contracted[b]) continue;
         mine.emplace_back(std::min(to_boost[a], to_boost[b]), std::max(to_boost[a], to_boost[b]));
     }
     for (std::size_t i = 0; i < verts.size(); ++i) {
-        if (verts[i].kind != VertexKind::extremum_min) continue;
+        if (!contracted[i]) continue;
         const auto& es = verts[i].edges;
         if (es.size() != 2) return "an E3 vertex without two edges";
         const std::size_t a = other_end(es[0], i), b = other_end(es[1], i);
@@ -444,7 +470,8 @@ inline SampledComparison compare_with_sampled_voronoi(const PreparedRegion& regi
 }
 
 // [VER-05] A random star-shaped polygon with integer coordinates in [-R, R]^2, counter-clockwise,
-// without collinear neighbours or parallel edges (those make plateaus and clusters, M5).
+// without collinear neighbours or parallel edges (those make plateaus and clusters, tested on their
+// own in test_degenerate.cpp).
 inline std::vector<IPoint> random_star_polygon(std::mt19937_64& rng, int n, std::int32_t R = 1'000'000)
 {
     std::uniform_real_distribution<double> angle(0.0, 2.0 * std::numbers::pi), radius(0.2, 1.0);
@@ -507,6 +534,27 @@ inline Region to_region(const std::vector<IPoint>& p)
 {
     Region region;
     for (const IPoint& q : p) region.outer.vertices.push_back({{double(q.first), double(q.second)}, 0.0});
+    return region;
+}
+
+// [VER-05] A random star polygon with every corner filleted (fraction 0 to 0.9 of the room).
+inline Region random_filleted(std::mt19937_64& rng, int n)
+{
+    const auto poly = random_star_polygon(rng, n);
+    std::vector<Vec2> p;
+    for (const IPoint& q : poly) p.push_back({double(q.first), double(q.second)});
+    std::uniform_real_distribution<double> f(0.05, 0.9);
+    std::vector<double> fraction(p.size());
+    for (double& x : fraction) x = f(rng);
+    return filleted(p, fraction);
+}
+
+// [VER-05] A random arc chain: a star polygon whose edges are arcs with random bulges.
+inline Region random_arc_chain(std::mt19937_64& rng, int n)
+{
+    Region region = to_region(random_star_polygon(rng, n));
+    std::uniform_real_distribution<double> b(-0.25, 0.25);
+    for (BulgeVertex& v : region.outer.vertices) v.bulge = b(rng);
     return region;
 }
 

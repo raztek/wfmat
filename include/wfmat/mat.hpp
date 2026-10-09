@@ -51,7 +51,8 @@ struct MatVertex {
     std::vector<EdgeId> edges;  // counter-clockwise around p
 };
 
-// [OUT-02], [OUT-04], [OUT-05] One MAT edge. u in [0, 1] maps linearly onto [r0, r1].
+// [OUT-02], [OUT-04], [OUT-05] One MAT edge. u in [0, 1] maps linearly onto [r0, r1]; on a plateau
+// edge (r0 = r1) it maps linearly onto arc length instead.
 class MatEdge {
 public:
     // Construction data, filled in by the engine. Sites, points and radii are in the unit frame.
@@ -59,7 +60,8 @@ public:
         VertexId v0 = no_id, v1 = no_id;
         SiteId left = 0, right = 0;  // seen along the direction of travel
         ConicKind kind = ConicKind::line;
-        int branch = 0;              // [KN-03] branch selector fixed at birth
+        int branch = 0;              // [KN-03] branch selector fixed at birth; plateau_arc: +1 when
+                                     // the edge runs counter-clockwise about the common centre
         Site a, b;                   // left and right sites
         double t0 = 0.0, t1 = 0.0;   // radius interval
         Vec2 p0, p1;                 // end points
@@ -77,7 +79,9 @@ public:
     double r0() const { return d_.xf.length_from_unit(d_.t0); }
     double r1() const { return d_.xf.length_from_unit(d_.t1); }
 
-    Vec2 point(double r) const;                     // shock position at radius r in [r0, r1]
+    bool is_plateau() const { return d_.kind == ConicKind::plateau_line || d_.kind == ConicKind::plateau_arc; }
+    Vec2 point(double r) const;                     // shock position at radius r in [r0, r1]; not
+                                                    // for plateau edges (gives the start point)
     Vec2 point_at(double u) const;
     double radius_at(double u) const;
     Vec2 tangent_at(double u) const;                // unit, along the direction of travel
@@ -86,6 +90,8 @@ public:
 private:
     double t_at(double u) const { return d_.t0 + u * (d_.t1 - d_.t0); }
     Vec2 unit_point(double t) const;
+    Vec2 plateau_point(double u) const;
+    Vec2 unit_point_at(double u) const { return is_plateau() ? plateau_point(u) : unit_point(t_at(u)); }
 
     Data d_;
 };
@@ -127,9 +133,8 @@ private:
     Transform xf_;
 };
 
-// [API-02] The interior MAT of a region. Since M2: polygons in general position. Arcs arrive with
-// M3 and simultaneous events (clusters, plateaus) with M5; until then such input is refused with
-// ErrorCode::unsupported.
+// [API-02] The interior MAT of a region bounded by lines and arcs (polygons since M2, arcs since
+// M3, simultaneous events and plateaus since M5).
 Result<MedialAxis> compute_mat(const Region& region, const Options& options = {});
 Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& options = {});
 
