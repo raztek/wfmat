@@ -52,6 +52,15 @@ Ubuntu's `libboost-dev nlohmann-json3-dev catch2`). Anything missing is fetched 
 FetchContent; `-DWFMAT_FETCH_DEPS=ON` fetches everything. `tl::expected` falls back to the copy
 in `third_party/`.
 
+With Visual Studio 2026, set `VCPKG_ROOT` (the Visual Studio vcpkg component or a vcpkg clone)
+and use the `vs2026` preset, from a terminal or by opening the folder in Visual Studio:
+
+```bat
+cmake --preset vs2026
+cmake --build --preset vs2026-release
+ctest --preset vs2026-release
+```
+
 | Dependency | Licence | Used by |
 | --- | --- | --- |
 | Boost.Geometry, Multiprecision, Math (header-only) | BSL-1.0 | core |

@@ -495,7 +495,7 @@ inline std::vector<IPoint> random_star_polygon(std::mt19937_64& rng, int n, std:
         for (int i = 0; i < n && ok; ++i) {
             const auto d = [&](int k) {
                 const IPoint u = p[k % n], v = p[(k + 1) % n];
-                return std::pair<std::int64_t, std::int32_t>{std::int64_t(v.first) - u.first,
+                return std::pair<std::int64_t, std::int64_t>{std::int64_t(v.first) - u.first,
                                                              std::int64_t(v.second) - u.second};
             };
             const auto di = d(i);
