@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 1.1 · 9 October 2026 · michael"
-version: "1.1"
+subtitle: "Version 1.2 · 9 October 2026 · michael"
+version: "1.2"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 1.2 | 2026-10-09 | minor revision | API-03: error code `unsupported` for valid input that a later milestone handles |
 | 1.1 | 2026-10-09 | minor revision | VER-01 and M1: kernel fixtures generated with SymPy instead of Maple |
 | 1.0 | 2026-10-09 | approved baseline | content of 0.2 approved by michael as the implementation baseline; sources moved to `docs/` in the wfmat repository, which is now the master copy; tagged `spec-v1.0` |
 | 0.2 | 2026-10-09 | preliminary draft | requirement identifiers added to every normative statement; requirements index (appendix A); tests cite the IDs they verify |
@@ -369,7 +370,7 @@ Result<std::vector<Loop>> inward_offset(const Region&, double distance, const Op
 } // namespace wfmat
 ```
 
-**[API-03]** `Result<T>` is `tl::expected<T, Error>`, keeping the C++20 baseline (it maps directly onto `std::expected` if the project later moves to C++23); `Error` carries a code (`invalid_input`, `numerical_failure`, `invariant_violation`), the offending loop and segment, and the path of the diagnostic dump if one was written. All output coordinates and radii are in the caller's units; normalisation is internal. A command-line tool, `wfmat-cli`, wraps `compute_mat` for JSON in, JSON and SVG out.
+**[API-03]** `Result<T>` is `tl::expected<T, Error>`, keeping the C++20 baseline (it maps directly onto `std::expected` if the project later moves to C++23); `Error` carries a code (`invalid_input`, `numerical_failure`, `invariant_violation`, or `unsupported` for valid input that the current milestone does not yet handle, with the milestone that will in the error's requirement field), the offending loop and segment, and the path of the diagnostic dump if one was written. All output coordinates and radii are in the caller's units; normalisation is internal. A command-line tool, `wfmat-cli`, wraps `compute_mat` for JSON in, JSON and SVG out.
 
 ## 11. Libraries and licensing
 
