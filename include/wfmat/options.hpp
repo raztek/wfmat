@@ -17,6 +17,7 @@ struct Options {
     Tolerances tol;
     BroadPhase broad_phase = BroadPhase::windowed_rtree;
     bool debug_checks = false;  // full invariants after every event
+    bool resolve_all_events = false;  // debug [RB-04]: send every event through cluster resolution
 };
 
 } // namespace wfmat

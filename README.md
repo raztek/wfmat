@@ -24,9 +24,16 @@ Each approved spec version is tagged `spec-vX.Y`.
   chains pass the property checks, and a sampled Voronoi oracle (Boost.Polygon on the boundary
   flattened to fine polylines) converges to the computed axis.
 
-Not yet handled, and refused with `ErrorCode::unsupported`: simultaneous events such as the four
-corners of a square meeting at its centre, and plateaus such as those of a rectangle or a slot
-(M5). See section 13 of the spec.
+- M5 (degeneracies): simultaneous events are gathered into clusters and resolved by one generic
+  procedure, so a square's four corners meet in one vertex of degree 4, and plateaus (the
+  constant-radius edges of rectangles, slots and curved slots) are plateau edges. A degeneracy
+  suite (orthogonal column polygons, shapes symmetric about both axes, tangential polygons,
+  gears, rounded rectangles, regular polygons up to 1024 sides) passes the property checks and,
+  for integer polygons, matches Boost.Polygon's Voronoi diagram. Sending every event through the
+  cluster resolution gives the same axis as the simple handlers (`Options::resolve_all_events`).
+
+`ErrorCode::unsupported` is now only the code for valid input that a later milestone handles;
+no input currently gets it. See section 13 of the spec.
 
 ## Building
 
@@ -45,6 +52,15 @@ Ubuntu's `libboost-dev nlohmann-json3-dev catch2`). Anything missing is fetched 
 FetchContent; `-DWFMAT_FETCH_DEPS=ON` fetches everything. `tl::expected` falls back to the copy
 in `third_party/`.
 
+With Visual Studio 2026, set `VCPKG_ROOT` (the Visual Studio vcpkg component or a vcpkg clone)
+and use the `vs2026` preset, from a terminal or by opening the folder in Visual Studio:
+
+```bat
+cmake --preset vs2026
+cmake --build --preset vs2026-release
+ctest --preset vs2026-release
+```
+
 | Dependency | Licence | Used by |
 | --- | --- | --- |
 | Boost.Geometry, Multiprecision, Math (header-only) | BSL-1.0 | core |
@@ -61,7 +77,7 @@ fast-math [LIB-03].
 | Path | Contents |
 | --- | --- |
 | `include/wfmat/` | public headers: `geom`, `region`, `options`, `result`, `prepare`, `kernel`, `mat`, `validate`, `io/json`, `io/svg` |
-| `src/` | library sources (`wfmat` core with the engine in `engine.cpp`, `wfmat_io` for JSON and SVG) |
+| `src/` | library sources (`wfmat` core with the engine in `engine.cpp` and cluster resolution in `cluster.cpp`, `wfmat_io` for JSON and SVG) |
 | `tools/wfmat-cli.cpp` | command-line tool |
 | `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes and kernel fixtures |
 | `tools/fixtures/` | fixture generator for the kernel tests (SymPy, `gen_kernel_fixtures.py`) |
@@ -75,7 +91,9 @@ Every test names the spec requirements it verifies as Catch2 tags, for example `
 The Voronoi comparison runs on 10^4 random polygons, and the property checks on 10^4 random
 shapes with arcs (about 30 s each in a release build); `WFMAT_RANDOM_POLYGONS=500` and
 `WFMAT_RANDOM_SHAPES=500` set smaller counts for quick local runs. With `WFMAT_DUMP=1` the arc
-test writes every failing shape to `build/tests/output/` as JSON, for `wfmat-cli`.
+test writes every failing shape to `build/tests/output/` as JSON, for `wfmat-cli`. The degeneracy
+suite and the cross-check run 2000 shapes each; `WFMAT_DEGENERATE_SHAPES` sets the count, and
+`WFMAT_DUMP=1` writes their failures there too.
 
 ## Licence
 

@@ -1,0 +1,24 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": { "major": 3, "minor": 25, "patch": 0 },
+  "configurePresets": [
+    {
+      "name": "vs2026",
+      "displayName": "Visual Studio 2026 (x64, vcpkg)",
+      "description": "MSVC build with the Visual Studio 2026 generator; dependencies come from vcpkg.json via VCPKG_ROOT.",
+      "generator": "Visual Studio 18 2026",
+      "architecture": "x64",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": { "WFMAT_WERROR": "ON" },
+      "condition": { "type": "equals", "lhs": "${hostSystemName}", "rhs": "Windows" }
+    }
+  ],
+  "buildPresets": [
+    { "name": "vs2026-release", "configurePreset": "vs2026", "configuration": "Release" },
+    { "name": "vs2026-debug", "configurePreset": "vs2026", "configuration": "Debug" }
+  ],
+  "testPresets": [
+    { "name": "vs2026-release", "configurePreset": "vs2026", "configuration": "Release", "output": { "outputOnFailure": true } }
+  ]
+}

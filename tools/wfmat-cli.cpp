@@ -1,6 +1,6 @@
 // wfmat-cli: validate a region given as bulge JSON, compute its MAT and render both to SVG
-// [API-03]. Input the engine does not handle yet (arcs before M3, clusters before M5) is reported
-// and rendered without its MAT.
+// [API-03]. Input the engine does not handle yet (ErrorCode::unsupported) is reported and rendered
+// without its MAT.
 
 #include <cstdio>
 #include <fstream>
@@ -66,9 +66,9 @@ int main(int argc, char** argv)
     if (mat) {
         const auto& st = mat->stats();
         std::printf("MAT: %zu vertices, %zu edges; events: %zu collapses, %zu transitions, %zu curvature ends, "
-                    "%zu splits, %zu contacts, %zu loops vanished\n",
+                    "%zu splits, %zu contacts, %zu clusters, %zu loops vanished\n",
                     mat->vertices().size(), mat->edges().size(), st.collapses, st.transitions, st.curvature_ends,
-                    st.splits, st.contacts, st.annihilations);
+                    st.splits, st.contacts, st.clusters, st.annihilations);
     } else if (mat.error().code == wfmat::ErrorCode::unsupported) {
         std::printf("MAT: not computed yet: %s\n", wfmat::to_string(mat.error()).c_str());
     } else {

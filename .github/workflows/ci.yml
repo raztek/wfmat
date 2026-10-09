@@ -59,9 +59,23 @@ jobs:
       - uses: ilammy/msvc-dev-cmd@v1
       - name: Configure
         run: >
-          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DWFMAT_WERROR=ON
           -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
       - name: Build
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+
+  vs2026:
+    name: Visual Studio 2026 (vcpkg)
+    runs-on: windows-2025-vs2026
+    env:
+      VCPKG_ROOT: C:\vcpkg
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: cmake --preset vs2026
+      - name: Build
+        run: cmake --build --preset vs2026-release
+      - name: Test
+        run: ctest --preset vs2026-release
