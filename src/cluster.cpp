@@ -235,18 +235,28 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         return best;
     };
 
-    // The loop, and its vertices: vertex i follows element i.
-    std::vector<std::uint32_t> elems, verts;
-    for (std::uint32_t x = start;;) {
-        elems.push_back(x);
-        verts.push_back(elements_[x].next);
-        x = next_element(x);
-        if (x == start) break;
+    // The elements whose live part comes near D [EV-11], in id order so that both broad phases
+    // see them in the same sequence, and their vertices.
+    Box reach;
+    for (Vec2 q : points) reach.add(q);
+    if (plateau) {
+        reach.add(element_box(px, t));
+        reach.add(element_box(py, t));
     }
+    reach = reach.inflated(std::max(rho, tangency_radius));
+    std::vector<std::uint32_t> elems;
+    near_elements(reach, start, elems);
+    std::erase_if(elems, [&](std::uint32_t e) { return !overlap(element_box(e, t), reach); });
+    std::sort(elems.begin(), elems.end());
     const std::size_t m = elems.size();
-    std::vector<char> dying(m, 0);
-    std::vector<int> vanchor(m, 0);
-    for (std::size_t i = 0; i < m; ++i) {
+    std::vector<std::uint32_t> verts;
+    std::map<std::uint32_t, std::size_t> vindex;
+    for (std::uint32_t e : elems)
+        for (std::uint32_t v : {elements_[e].prev, elements_[e].next})
+            if (vindex.emplace(v, verts.size()).second) verts.push_back(v);
+    std::vector<char> dying(verts.size(), 0);
+    std::vector<int> vanchor(verts.size(), 0);
+    for (std::size_t i = 0; i < verts.size(); ++i) {
         if (const auto q = position(verts[i], t); q && gap(*q) <= rho) {
             dying[i] = 1;
             vanchor[i] = nearest(*q);
@@ -260,7 +270,6 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
             }
         }
     }
-
     // 2. Pieces of the surviving elements.
     struct Piece {
         std::uint32_t old;
@@ -285,8 +294,8 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
 
     for (std::size_t i = 0; i < m; ++i) {
         const std::uint32_t e = elems[i];
-        const std::size_t ip = (i + m - 1) % m;
-        const bool lp = dying[ip], ln = dying[i];
+        const std::size_t ip = vindex.at(elements_[e].prev), in = vindex.at(elements_[e].next);
+        const bool lp = dying[ip], ln = dying[in];
         if (e == px || e == py) {
             // A plateau element runs along the plateau from one anchor to the other.
             const int enter = e == px ? 0 : 1, leave = 1 - enter;
@@ -301,20 +310,20 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
             touched[i] = 1;
             const auto mid = midpoint(e);
             if (!mid || gap(*mid) <= rho) {
-                contact(mid ? nearest(*mid) : vanchor[i], e);
+                contact(mid ? nearest(*mid) : vanchor[in], e);
                 continue;
             }
-            pieces.push_back({e, vanchor[ip], vanchor[i]});
+            pieces.push_back({e, vanchor[ip], vanchor[in]});
             contact(vanchor[ip], e);
-            contact(vanchor[i], e);
+            contact(vanchor[in], e);
         } else if (lp) {
             touched[i] = 1;
             pieces.push_back({e, vanchor[ip], -1});
             contact(vanchor[ip], e);
         } else if (ln) {
             touched[i] = 1;
-            pieces.push_back({e, -1, vanchor[i]});
-            contact(vanchor[i], e);
+            pieces.push_back({e, -1, vanchor[in]});
+            contact(vanchor[in], e);
         } else {
             // The front passes through D between its two surviving vertices.
             const Site& s = site(e);
@@ -331,7 +340,7 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
 
     // Dying vertices.
-    for (std::size_t i = 0; i < m; ++i)
+    for (std::size_t i = 0; i < verts.size(); ++i)
         if (dying[i] && vertices_[verts[i]].type == VertexType::shock) ++anchors[vanchor[i]].shocks_in;
 
     // Kill the touched elements and create the pieces; a piece keeps the vertex it has not lost.
@@ -427,8 +436,11 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
     if (2 * links.size() != np) return failure("unpaired front ports");
     if (np == 0)
-        for (std::size_t i = 0; i < m; ++i)
-            if (!touched[i]) return failure("a vanishing loop with surviving elements");
+        for (std::uint32_t x = start;;) {
+            if (elements_[x].alive) return failure("a vanishing loop with surviving elements");
+            x = next_element(x);
+            if (x == start) break;
+        }
 
     // 4. Emit the MAT vertices, close the dying shocks, add the plateau edge and the new shocks.
     for (Anchor& a : anchors) {
@@ -448,7 +460,7 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         }
         a.mv = add_mat_vertex_at_sites(a.p, t, kind, contacts);
     }
-    for (std::size_t i = 0; i < m; ++i) {
+    for (std::size_t i = 0; i < verts.size(); ++i) {
         if (!dying[i]) continue;
         close_edge(verts[i], anchors[vanchor[i]].mv, anchors[vanchor[i]].p, t);
         vertices_[verts[i]].alive = false;
@@ -472,7 +484,6 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         mat_edges.push_back(d);
     }
 
-    const std::uint32_t first_loop = next_loop_;
     std::vector<std::uint32_t> born;
     for (const auto& [i, j] : links) {
         const Port &in = ports[i], &out = ports[j];
@@ -485,8 +496,9 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         elements_[out.element].prev = *v;
         born.push_back(*v);
     }
-    for (std::uint32_t v : born)
-        if (elements_[vertices_[v].left].loop < first_loop) relabel_loop(vertices_[v].left);
+    std::vector<std::uint32_t> starts;
+    for (std::uint32_t v : born) starts.push_back(vertices_[v].left);
+    relabel_loops(starts);
 
     ++stats.clusters;
     if (np == 0) ++stats.annihilations;

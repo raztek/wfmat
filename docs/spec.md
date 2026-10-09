@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 1.3 · 9 October 2026 · michael"
-version: "1.3"
+subtitle: "Version 1.4 · 9 October 2026 · michael"
+version: "1.4"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 1.4 | 2026-10-09 | minor revision | EV-11, EV-12, RB-01: the windowed broad phase as implemented in M6 (window choice, split candidates, event identity in the queue order); PF-01: heap compaction rule; PF-02: times measured in M6; VER-07: benchmark families |
 | 1.3 | 2026-10-09 | minor revision | EV-04: a circle front can also reach a regular vertex; RB-02, RB-03: cluster radius, port ordering and vertex kinds as implemented in M5; RB-04 and API: `resolve_all_events` option for the cross-check |
 | 1.2 | 2026-10-09 | minor revision | API-03: error code `unsupported` for valid input that a later milestone handles |
 | 1.1 | 2026-10-09 | minor revision | VER-01 and M1: kernel fixtures generated with SymPy instead of Maple |
@@ -203,12 +204,14 @@ Three generic event types produce every MAT vertex: a local collapse, a non-loca
 
 **[EV-11] Non-local event scheduling.** Split and contact candidates come from a windowed broad phase that relies on the Lipschitz bound of section 2: a live front piece at time $t + \Delta$ lies within $\Delta$ of the same piece at time $t$.
 
-1. At window start $t_k$, insert the bounding box of every live element, inflated by $\Delta_k$, into an R-tree.
-2. For each overlapping pair of non-adjacent elements, compute exact E2 and E3 candidates in $[t_k,\, t_k + \Delta_k]$ with the kernel, and enqueue the valid ones.
-3. Choose $\Delta_k$ adaptively (initially the median distance between nearest non-adjacent elements) and rebuild when the window expires or after a split changes many pieces.
-4. When a handler creates or reshapes an element inside the window, query the current R-tree for it immediately, so no candidate is missed.
+1. A window $[t_k,\, t_k + \Delta_k]$ opens when the next queued event lies beyond the current one, at the end of the previous window. The box of every live element at $t_k$ (its two ends, and the extreme points of an arc between them), inflated by $\Delta_k$, goes into an R-tree.
+2. For each overlapping pair of non-adjacent elements, compute exact E2 and E3 candidates in $(t_k,\, t_k + \Delta_k]$ with the kernel, and enqueue the valid ones. A shock reaching element $c$ moves along both of its elements, so a split is a candidate only when both of their boxes meet the box of $c$. Roots outside the window are left to the window that contains them.
+3. $\Delta_0$ is the median distance from an element's box to the nearest box of a non-adjacent element, or the median box diagonal when that median is zero. A window doubles when the previous one found fewer than 8 candidate pairs per live element or handled fewer events than a quarter of the live elements, and halves when it found more than 64 pairs per element.
+4. When a handler creates or reshapes an element inside the window, query the current R-tree for it immediately, so no candidate is missed. A new element enters the R-tree with its box from now to the end of the window.
 
-**[EV-12]** A debug mode replaces the broad phase with all pairs; the two must produce identical event sequences, which is a standing regression test.
+Cluster resolution [RB-03] and loop relabelling after a split [EV-09] use the same R-tree, so an event costs time for its neighbourhood rather than for its whole loop.
+
+**[EV-12]** A debug mode (`BroadPhase::all_pairs`) replaces the broad phase with all pairs and an unbounded window; the two must produce identical event sequences, bit for bit, which is a standing regression test. Contact candidates are always formed with the lower element id first, so a pair has one orientation whichever element asked for it.
 
 **[EV-13] Validity at pop time.** A candidate is accepted only if every involved element and vertex still has the version it was computed with and every contact foot lies inside the live part of its element at the event time (closed intervals, $\varepsilon_{\text{geom}}$ slack). Feet that land exactly on a vertex are handed to cluster resolution.
 
@@ -258,7 +261,7 @@ Here $g$ is the gap between the two sites measured along the common normal. A ca
 
 Degenerate configurations are the normal case in CAD data (rectangles, slots, regular polygons), so they are not perturbed away; simultaneous events are merged into clusters and resolved by one generic topological procedure that subsumes every special case.
 
-**[RB-01] Event ordering.** The queue orders by $(t,\ \text{kind},\ \text{smallest involved id})$. Ties are therefore deterministic, and no hash-ordered container is ever iterated on a path that affects output.
+**[RB-01] Event ordering.** The queue orders by $(t,\ \text{kind},\ \text{smallest involved element id})$, then by the rest of the event's identity (its elements, its vertex and their versions), so that the order never depends on when an event was found. Ties are therefore deterministic, and no hash-ordered container is ever iterated on a path that affects output.
 
 **[RB-02] Cluster formation.** When an event is popped at $(t^*, p^*)$, every other valid event with $\lvert t - t^*\rvert \le \varepsilon_t$ whose point lies within the cluster radius $\rho = 10\,\varepsilon_{\text{geom}}$ of a point already in the cluster joins it (a breadth-first search over a grid of cells of size $\rho$, linear in the number of events). A plateau contributes its whole overlap segment or arc instead of a point. Repeats of one event are dropped; a cluster of one event goes to its simple handler.
 
@@ -296,7 +299,7 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 | Local events | $O(n \log n)$ | $O(1)$ kernel solve plus a heap operation each |
 | Non-local candidates | $O(n \log n)$ typical, $O(n^2)$ worst | windowed R-tree; worst case is many long, nearly parallel fronts |
 | Cluster resolution | $O(m \log m)$ per cluster of $m$ events | sum over clusters is $O(n \log n)$ |
-| Memory | $O(n)$ | pools of elements, vertices and events; stale events bounded by a periodic heap compaction |
+| Memory | $O(n)$ | pools of elements, vertices and events; stale events dropped by a heap compaction whenever the heap has doubled since the last one |
 
 **[PF-02] Targets (single thread, release build, a current desktop CPU)**
 
@@ -305,6 +308,17 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 | 1,000 segments | under 5 ms |
 | 10,000 segments | under 60 ms |
 | 100,000 segments | under 1 s |
+
+Measured in M6 (release build, one core of the CI-class cloud machine, `compute_mat` on a prepared region; the benchmark suite reports `prepare` separately):
+
+| Family (VER-07) | 1,000 segments | 10,000 segments |
+| --- | --- | --- |
+| Filleted star (random fillets) | 17 ms | 1.3 s |
+| Wavy outline (smooth star) | 80 ms | 0.6 s |
+| Spiky star | 120 ms | 15 s |
+| Gear | 530 ms | over 15 s |
+
+The broad phase meets the identical-sequence requirement [EV-12] but not these targets: the boxes of neighbours on the same smooth curve overlap in every window, and fronts that converge on one point (gears, regular polygons) make every pair a candidate. Closing the gap is follow-up work.
 
 The targets are budgets for v1 to be measured against, not results; the benchmark suite in section 12 tracks them. Parallelism is out of scope for v1, because the event order is inherently sequential; batch processing of many shapes is parallel by construction, since runs share no state.
 
@@ -424,7 +438,7 @@ Every test cites the requirement identifiers it verifies. Correctness is establi
 
 **[VER-06] Degeneracy suite.** Families built to hit clusters: rectangles and slots, regular polygons up to $n = 1024$, cocircular point sets, gears, and shapes with exact symmetry along both axes.
 
-**[VER-07] Benchmarks.** Google Benchmark on scaled families (gear outlines, random fillets, a font glyph set) at $10^3$ to $10^5$ segments, tracked against the targets in section 9.
+**[VER-07] Benchmarks.** Google Benchmark on scaled families (gear outlines, random fillets on a star polygon, a smooth wavy outline, a spiky star polygon; a font glyph set to follow) at $10^3$ to $10^5$ segments, tracked against the targets in section 9, with the all-pairs mode at $10^3$ for scale.
 
 ## 13. Milestones
 

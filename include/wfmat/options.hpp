@@ -11,6 +11,8 @@ struct Tolerances {
     double time = 1e-11;   // event-time clustering
 };
 
+// [EV-11], [EV-12] How non-local event candidates are found: a windowed R-tree, or all pairs (a
+// debug mode that must process the same events).
 enum class BroadPhase { windowed_rtree, all_pairs };
 
 struct Options {

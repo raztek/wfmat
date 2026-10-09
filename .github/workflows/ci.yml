@@ -19,8 +19,9 @@ jobs:
           - name: gcc-13 (system packages)
             os: ubuntu-24.04
             cxx: g++-13
-            packages: libboost-dev nlohmann-json3-dev catch2
+            packages: libboost-dev nlohmann-json3-dev catch2 libbenchmark-dev
             fetch: OFF
+            bench: ON
           - name: clang-18 (system packages)
             os: ubuntu-24.04
             cxx: clang++-18
@@ -38,11 +39,14 @@ jobs:
       - name: Configure
         run: >
           cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
-          -DWFMAT_WERROR=ON -DWFMAT_FETCH_DEPS=${{ matrix.fetch }}
+          -DWFMAT_WERROR=ON -DWFMAT_FETCH_DEPS=${{ matrix.fetch }} -DWFMAT_BUILD_BENCHMARKS=${{ matrix.bench || 'OFF' }}
       - name: Build
         run: cmake --build build
       - name: Test
         run: ctest --test-dir build --output-on-failure
+      - name: Benchmarks (1,000 segments)
+        if: matrix.bench == 'ON'
+        run: ./build/wfmat-bench --benchmark_filter='/1000$' --benchmark_min_time=0.01s
       - name: Render canonical shapes
         run: for f in tests/data/*.json; do ./build/wfmat-cli "$f" --svg "build/$(basename "$f" .json).svg"; done
       - uses: actions/upload-artifact@v4

@@ -558,4 +558,29 @@ inline Region random_arc_chain(std::mt19937_64& rng, int n)
     return region;
 }
 
+// [EV-12] Two runs processed the same events in the same order: the same vertices and edges in
+// the same order, bit for bit.
+inline std::string identical_mat(const MedialAxis& a, const MedialAxis& b)
+{
+    if (a.vertices().size() != b.vertices().size() || a.edges().size() != b.edges().size())
+        return std::to_string(a.vertices().size()) + " vertices and " + std::to_string(a.edges().size()) +
+               " edges vs " + std::to_string(b.vertices().size()) + " and " + std::to_string(b.edges().size());
+    for (std::size_t i = 0; i < a.vertices().size(); ++i) {
+        const MatVertex &v = a.vertices()[i], &w = b.vertices()[i];
+        bool same = v.p.x == w.p.x && v.p.y == w.p.y && v.r == w.r && v.kind == w.kind &&
+                    v.contacts.size() == w.contacts.size() && v.edges == w.edges;
+        for (std::size_t k = 0; same && k < v.contacts.size(); ++k) same = v.contacts[k].site == w.contacts[k].site;
+        if (!same)
+            return "vertex " + std::to_string(i) + " differs: (" + sci(v.p.x) + ", " + sci(v.p.y) + ") vs (" +
+                   sci(w.p.x) + ", " + sci(w.p.y) + ")";
+    }
+    for (std::size_t i = 0; i < a.edges().size(); ++i) {
+        const MatEdge &e = a.edges()[i], &f = b.edges()[i];
+        if (e.v0() != f.v0() || e.v1() != f.v1() || e.left() != f.left() || e.right() != f.right() ||
+            e.kind() != f.kind() || e.r0() != f.r0() || e.r1() != f.r1())
+            return "edge " + std::to_string(i) + " differs";
+    }
+    return {};
+}
+
 } // namespace wfmat::test

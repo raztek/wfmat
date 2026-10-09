@@ -229,7 +229,15 @@ Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, co
     Solve3 out;
 
     // Candidate (x, y, t) with the condition of its algebraic solve.
-    std::vector<std::pair<Vec3, double>> candidates;
+    // At most two: a linear solve or the two roots of the quadratic. A fixed buffer, since this runs
+    // for every candidate pair of the broad phase.
+    struct Candidates {
+        std::array<std::pair<Vec3, double>, 2> items;
+        std::size_t count = 0;
+        void emplace_back(Vec3 z, double condition) { items[count++] = {z, condition}; }
+        auto begin() const { return items.begin(); }
+        auto end() const { return items.begin() + static_cast<std::ptrdiff_t>(count); }
+    } candidates;
 
     // The pivot is the circle with the smallest coefficients: subtracting it from a nearly flat arc
     // (huge centre and radius) leaves a well-scaled plane, while pivoting on the flat arc would put
@@ -304,6 +312,10 @@ Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, co
         for (const Site& s : sites)
             if (!s.is_line() && s.offset_radius(z.t) < -std::max(tol.geom, 1e-8 * s.R)) radii_ok = false;
         if (!radii_ok) continue;
+        // A root far outside [t_now, t_max] even allowing for its condition cannot be moved inside by
+        // refinement: skip both refinements. Callers bound t_max by their event window [EV-11].
+        const double reach = 1e-12 * condition * (1.0 + std::abs(z.t)) + 1e-9;
+        if (z.t + reach < t_now - tol.time || z.t - reach > t_max) continue;
 
         Root3 r = refine(sites, make_root(sites, {z.x, z.y}, z.t, condition), false);
         r.condition = std::max(r.condition, condition);
@@ -488,19 +500,21 @@ std::vector<Contact> contacts(const Site& a, const Site& b, double t_now, const 
     };
     const Profile pa = profile(a), pb = profile(b);
 
-    std::vector<double> kinks;
-    if (pa.gamma != 0.0) kinks.push_back(pa.k);
-    if (pb.gamma != 0.0) kinks.push_back(pb.k);
-    std::sort(kinks.begin(), kinks.end());
-    std::vector<std::pair<double, double>> intervals;
+    std::array<double, 2> kinks{};
+    std::size_t nk = 0;
+    if (pa.gamma != 0.0) kinks[nk++] = pa.k;
+    if (pb.gamma != 0.0) kinks[nk++] = pb.k;
+    if (nk == 2 && kinks[1] < kinks[0]) std::swap(kinks[0], kinks[1]);
+    std::array<std::pair<double, double>, 3> intervals;
     double lo = -std::numeric_limits<double>::infinity();
-    for (double k : kinks) {
-        intervals.emplace_back(lo, k);
-        lo = k;
+    for (std::size_t i = 0; i < nk; ++i) {
+        intervals[i] = {lo, kinks[i]};
+        lo = kinks[i];
     }
-    intervals.emplace_back(lo, std::numeric_limits<double>::infinity());
+    intervals[nk] = {lo, std::numeric_limits<double>::infinity()};
 
-    for (const auto& [s0, s1] : intervals) {
+    for (std::size_t iv = 0; iv <= nk; ++iv) {
+        const auto [s0, s1] = intervals[iv];
         const double mid = std::isinf(s0) ? s1 - 1.0 : std::isinf(s1) ? s0 + 1.0 : 0.5 * (s0 + s1);
         auto linear = [mid](const Profile& p) {
             const double sg = mid >= p.k ? 1.0 : -1.0;

@@ -2,17 +2,25 @@
 // handlers. Internal to the library; compute_mat in src/mat.cpp is the public entry point.
 #pragma once
 
+#include <algorithm>
 #include <array>
 #include <cstdint>
+#include <limits>
+#include <memory>
 #include <optional>
-#include <queue>
 #include <string>
+#include <tuple>
 #include <utility>
 #include <vector>
 
 #include "wfmat/mat.hpp"
 
 namespace wfmat::detail {
+
+inline bool overlap(const Box& a, const Box& b)
+{
+    return a.lo.x <= b.hi.x && b.lo.x <= a.hi.x && a.lo.y <= b.hi.y && b.lo.y <= a.hi.y;
+}
 
 // "(x, y) at t = ..." for diagnostics, in the unit frame.
 std::string point_text(Vec2 p, double t);
@@ -53,20 +61,58 @@ struct Event {
     std::uint32_t vertex = no_id;  // split: the shock that reaches elements[0]
 };
 
-// [RB-01] Earliest time first, then kind, then the smallest id.
+// [RB-01] Earliest time first, then kind, then the smallest id; then the rest of the event's
+// identity, so that the order does not depend on when an event was found [EV-12].
 struct Later {
     bool operator()(const Event& a, const Event& b) const
     {
         if (a.t != b.t) return a.t > b.t;
         if (a.kind != b.kind) return a.kind > b.kind;
         if (a.key != b.key) return a.key > b.key;
+        const auto id = [](const Event& e) {
+            return std::tuple{e.elements[0], e.elements[1], e.vertex, e.versions[0], e.versions[1]};
+        };
+        if (id(a) != id(b)) return id(a) > id(b);
         return a.seq > b.seq;
     }
 };
 
+// The event heap [EV-10]: a binary heap on a vector, so that stale events can be dropped in bulk.
+class EventQueue {
+public:
+    bool empty() const { return heap_.empty(); }
+    std::size_t size() const { return heap_.size(); }
+    const Event& top() const { return heap_.front(); }
+    void push(const Event& ev)
+    {
+        heap_.push_back(ev);
+        std::push_heap(heap_.begin(), heap_.end(), Later{});
+    }
+    void pop()
+    {
+        std::pop_heap(heap_.begin(), heap_.end(), Later{});
+        heap_.pop_back();
+    }
+    // Drops the events matching pred and restores the heap; returns how many were dropped.
+    template <class Pred>
+    std::size_t remove_if(Pred pred)
+    {
+        const std::size_t before = heap_.size();
+        std::erase_if(heap_, pred);
+        std::make_heap(heap_.begin(), heap_.end(), Later{});
+        return before - heap_.size();
+    }
+
+private:
+    std::vector<Event> heap_;
+};
+
+struct BroadIndex;  // the R-tree of the windowed broad phase, in engine.cpp
+
 class Engine {
 public:
     Engine(const PreparedRegion& region, const Options& options);
+    ~Engine();
 
     Result<void> run();
 
@@ -104,9 +150,20 @@ private:
     Result<std::uint32_t> add_shock(std::uint32_t left, std::uint32_t right, Vec2 p, double t, std::uint32_t mat_vertex,
                                     std::optional<Vec2> direction = std::nullopt);
     void close_edge(std::uint32_t vertex, std::uint32_t mat_vertex, Vec2 p, double t);
-    void relabel_loop(std::uint32_t start);
+    void relabel_loops(const std::vector<std::uint32_t>& starts);
 
-    // [EV-10], [EV-11] Scheduling; all pairs within a loop [EV-12].
+    // [EV-11] The windowed broad phase; with all_pairs [EV-12], every element of the loop is a
+    // candidate and the window is unbounded.
+    Box element_box(std::uint32_t e, double t) const;
+    double initial_window() const;
+    bool open_window();
+    void index_element(std::uint32_t e);
+    void near_elements(const Box& b, std::uint32_t element, std::vector<std::uint32_t>& out);
+    void compact_queue();
+
+    // [EV-10], [EV-11] Scheduling. Non-local candidates are searched from t_from() to the end of
+    // the window; earlier roots belong to earlier windows.
+    double t_from() const { return std::max(t_now_, push_floor_); }
     void schedule_collapse(std::uint32_t e);
     void schedule_split(std::uint32_t v, std::uint32_t c);
     void schedule_regular_split(std::uint32_t g, std::uint32_t c);
@@ -138,7 +195,26 @@ private:
     std::uint64_t seq_ = 0;
     std::vector<FrontElement> elements_;
     std::vector<FrontVertex> vertices_;
-    std::priority_queue<Event, std::vector<Event>, Later> queue_;
+    EventQueue queue_;
+    std::size_t compact_at_ = 4096;
+
+    // Broad phase state. Non-collapse events are kept only when push_floor_ < t <= win_hi_.
+    static constexpr double unbounded = std::numeric_limits<double>::infinity();
+    bool windowed_ = true;
+    double win_hi_ = unbounded;
+    double push_floor_ = -unbounded;
+    double delta_ = 0.0;
+    std::vector<std::uint32_t> live_;  // elements alive at the last window start, plus newer ones
+    std::size_t listed_ = 0;           // elements_ below this index have been through live_
+    std::vector<Box> window_box_;      // the indexed box of each element; empty when not indexed
+    std::unique_ptr<BroadIndex> index_;
+    std::size_t window_pairs_ = 0;      // candidate pairs found when the window opened
+    std::size_t window_events_ = 0;     // events handled in the window
+    std::vector<std::uint32_t> near_;   // scratch for near_elements
+
+    // relabel_loops: per-element marks, valid for the current epoch only.
+    std::vector<std::uint64_t> mark_;
+    std::uint32_t epoch_ = 0;
 };
 
 } // namespace wfmat::detail

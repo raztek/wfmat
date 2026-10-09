@@ -32,6 +32,12 @@ Each approved spec version is tagged `spec-vX.Y`.
   for integer polygons, matches Boost.Polygon's Voronoi diagram. Sending every event through the
   cluster resolution gives the same axis as the simple handlers (`Options::resolve_all_events`).
 
+- M6 (performance): non-local events come from a windowed R-tree broad phase
+  (`BroadPhase::windowed_rtree`, the default), which processes exactly the events of the
+  all-pairs mode, bit for bit, and is 10 to 200 times faster on 1,000 segments. The event heap
+  drops stale events in bulk. The spec's speed targets are not met yet; spec 1.4, section 9, lists
+  the measured times.
+
 `ErrorCode::unsupported` is now only the code for valid input that a later milestone handles;
 no input currently gets it. See section 13 of the spec.
 
@@ -68,6 +74,7 @@ ctest --preset vs2026-release
 | nlohmann/json | MIT | `wfmat_io` |
 | Catch2 v3 | BSL-1.0 | tests |
 | Boost.Polygon (header-only) | BSL-1.0 | tests (Voronoi oracle) |
+| Google Benchmark | Apache-2.0 | benchmarks (optional, `-DWFMAT_BUILD_BENCHMARKS=ON`) |
 
 The library is compiled with `-ffp-contract=off` (`/fp:precise` on MSVC) and never with
 fast-math [LIB-03].
@@ -80,6 +87,7 @@ fast-math [LIB-03].
 | `src/` | library sources (`wfmat` core with the engine in `engine.cpp` and cluster resolution in `cluster.cpp`, `wfmat_io` for JSON and SVG) |
 | `tools/wfmat-cli.cpp` | command-line tool |
 | `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes and kernel fixtures |
+| `bench/` | Google Benchmark suite (`wfmat-bench`) and its scaled shape families |
 | `tools/fixtures/` | fixture generator for the kernel tests (SymPy, `gen_kernel_fixtures.py`) |
 | `docs/` | specification sources and PDF |
 
@@ -93,7 +101,15 @@ shapes with arcs (about 30 s each in a release build); `WFMAT_RANDOM_POLYGONS=50
 `WFMAT_RANDOM_SHAPES=500` set smaller counts for quick local runs. With `WFMAT_DUMP=1` the arc
 test writes every failing shape to `build/tests/output/` as JSON, for `wfmat-cli`. The degeneracy
 suite and the cross-check run 2000 shapes each; `WFMAT_DEGENERATE_SHAPES` sets the count, and
-`WFMAT_DUMP=1` writes their failures there too.
+`WFMAT_DUMP=1` writes their failures there too. The broad-phase test compares both broad phases
+on 2000 random shapes (`WFMAT_RANDOM_SHAPES`).
+
+## Benchmarks
+
+With Google Benchmark installed (`libbenchmark-dev` on Ubuntu), configure with
+`-DWFMAT_BUILD_BENCHMARKS=ON` and run `./build/wfmat-bench`. It times `prepare` and
+`compute_mat` on gears, filleted stars, wavy outlines and spiky stars at 1,000, 10,000 and 100,000
+segments; `--benchmark_filter='/1000$'` keeps the small sizes.
 
 ## Licence
 

@@ -206,7 +206,8 @@ std::string same_mat(const MedialAxis& a, const MedialAxis& b, double tol)
 }
 
 // Runs a family of shapes, with the property checks, the Boost.Polygon comparison for integer
-// polygons, and the [RB-04] cross-check against cluster resolution of every event.
+// polygons, the [RB-04] cross-check against cluster resolution of every event, and the [EV-12]
+// check that the all-pairs broad phase processes the same events.
 struct FamilyRun {
     int failures = 0;
     std::string first;
@@ -235,6 +236,13 @@ struct FamilyRun {
             auto all = compute_mat(*prep, options);
             why = all ? same_mat(*mat, *all, 1e-9 * prep->xf.scale) : to_string(all.error());
             if (!why.empty()) why = "cluster resolution of every event: " + why;
+        }
+        if (why.empty()) {
+            options.resolve_all_events = false;
+            options.broad_phase = BroadPhase::all_pairs;
+            auto all = compute_mat(*prep, options);
+            why = all ? identical_mat(*mat, *all) : to_string(all.error());
+            if (!why.empty()) why = "all-pairs broad phase: " + why;
         }
         if (!why.empty()) fail(name, why, region);
     }
@@ -359,7 +367,7 @@ TEST_CASE("Corridors: plateaus ending at reflex corners", "[M5][RB-03][VER-03][V
     CHECK(family.failures == 0);
 }
 
-TEST_CASE("Degeneracy suite", "[M5][RB-02][RB-03][RB-04][VER-03][VER-06]")
+TEST_CASE("Degeneracy suite", "[M5][RB-02][RB-03][RB-04][EV-12][VER-03][VER-06]")
 {
     const int shapes = degenerate_shape_count();
     std::mt19937_64 rng(20261010);
