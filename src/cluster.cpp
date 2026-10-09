@@ -222,6 +222,10 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     for (const Anchor& a : anchors) points.push_back(a.p);
 
     const double rho = cluster_radius();
+    // How far the points of a point cluster are from its anchor; a plateau's anchors are its ends.
+    double spread = rho;
+    if (!plateau)
+        for (Vec2 q : points) spread = std::max(spread, dist(q, anchors[0].p));
     auto gap = [&](Vec2 x) {
         double d = std::numeric_limits<double>::infinity();
         for (Vec2 q : points) d = std::min(d, dist(x, q));
@@ -256,11 +260,33 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
             if (vindex.emplace(v, verts.size()).second) verts.push_back(v);
     std::vector<char> dying(verts.size(), 0);
     std::vector<int> vanchor(verts.size(), 0);
+    std::vector<std::optional<Vec2>> at(verts.size());  // where a dying vertex meets D
     for (std::size_t i = 0; i < verts.size(); ++i) {
-        if (const auto q = position(verts[i], t); q && gap(*q) <= rho) {
+        const auto q = position(verts[i], t);
+        if (q && gap(*q) <= rho) {
             dying[i] = 1;
             vanchor[i] = nearest(*q);
-        } else if (!q) {
+            at[i] = q;
+        } else if (q) {
+            // A shock between nearly parallel fronts moves fast, so rounding in t* puts it far from
+            // D at t*; it is dying if it passes D within the cluster's time window [RB-02].
+            const auto a = position(verts[i], std::max(vertices_[verts[i]].t0, t - tol_.time));
+            const auto b = position(verts[i], t + tol_.time);
+            if (a && b && !plateau) {
+                double d = std::numeric_limits<double>::infinity();
+                Vec2 meet;
+                for (Vec2 x : points)
+                    if (segment_distance(x, *a, *b) < d) {
+                        d = segment_distance(x, *a, *b);
+                        meet = x;
+                    }
+                if (d <= rho) {
+                    dying[i] = 1;
+                    vanchor[i] = nearest(meet);
+                    at[i] = meet;
+                }
+            }
+        } else {
             // Rounding has taken t* just past the tangency where this shock ends; its position
             // a little earlier is near the tangency point, within sqrt(dt R) [EV-08].
             const auto e = position(verts[i], std::max(vertices_[verts[i]].t0, t - 1e-9));
@@ -280,16 +306,21 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     auto contact = [&](int k, std::uint32_t e) { anchors[k].contacts.push_back(elements_[e].site); };
     auto midpoint = [&](std::uint32_t e) -> std::optional<Vec2> {
         const FrontElement& el = elements_[e];
-        const auto pl = position(el.prev, t), pr = position(el.next, t);
+        auto where = [&](std::uint32_t v) {
+            const auto it = vindex.find(v);
+            return it != vindex.end() && at[it->second] ? at[it->second] : position(v, t);
+        };
+        const auto pl = where(el.prev), pr = where(el.next);
         if (!pl || !pr) return std::nullopt;
         const Site& s = sites[el.site];
         if (s.is_line()) return 0.5 * (*pl + *pr);
         const Vec2 c = s.centre;
         auto angle = [&](Vec2 q) { return s.sigma * std::atan2(q.y - c.y, q.x - c.x); };
         const double al = angle(*pl);
+        const double r = std::max(s.offset_radius(t), 0.0);
         double sweep = wrap_2pi(angle(*pr) - al);
-        if (sweep > two_pi - tol_.ang) sweep = 0.0;
-        return c + std::max(s.offset_radius(t), 0.0) * polar(s.sigma * (al + 0.5 * sweep));
+        if (sweep > two_pi - (tol_.ang + (r > rho ? spread / r : 0.0))) sweep = 0.0;  // ends crossed within D
+        return c + r * polar(s.sigma * (al + 0.5 * sweep));
     };
 
     for (std::size_t i = 0; i < m; ++i) {
@@ -355,10 +386,6 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     };
     std::vector<Port> ports;
     std::vector<std::uint32_t> fresh;
-    // How far the points of a point cluster are from its anchor; a plateau's anchors are its ends.
-    double spread = rho;
-    if (!plateau)
-        for (Vec2 q : points) spread = std::max(spread, dist(q, anchors[0].p));
     auto port = [&](std::uint32_t id, bool in, int k) {
         const Site& s = site(id);
         const Vec2 f = front_point(s, t, anchors[k].p);

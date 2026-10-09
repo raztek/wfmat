@@ -248,8 +248,6 @@ struct FamilyRun {
     }
 };
 
-} // namespace
-
 TEST_CASE("Rectangle: four corner edges and a plateau", "[M5][RB-03][OUT-02][VER-02]")
 {
     const Region region = load("rectangle.json");  // 100 x 40
@@ -367,15 +365,12 @@ TEST_CASE("Corridors: plateaus ending at reflex corners", "[M5][RB-03][VER-03][V
     CHECK(family.failures == 0);
 }
 
-TEST_CASE("A tangency a cluster radius from a tangent join", "[M5][RB-03][EV-12]")
+// A piece cut from a large filleted star, run with the star's tolerances (f is the star's frame
+// over the piece's): both broad phases must give one valid axis with one cluster.
+void check_star_piece(const std::string& name, double f)
 {
-    // Cut from a 40,000-segment filleted star: a slit's end arc touches the nearly parallel side of
-    // the next spike 9e-10 from the arc's join with its own side, and the contact and the join's
-    // split form one cluster. The tangent ports' directions are known only to the cluster radius
-    // over the arc's radius. Tolerances are those of the whole star.
-    const Region region = load("near-tangent-slit.json");
+    const Region region = load(name);
     Options options;
-    const double f = 2.8452320593455993;  // the star's frame over this piece's
     options.tol.geom *= f;
     options.tol.len *= f;
     options.tol.time *= f;
@@ -388,6 +383,25 @@ TEST_CASE("A tangency a cluster radius from a tangent join", "[M5][RB-03][EV-12]
     auto all = compute_mat(prep, options);
     REQUIRE(all);
     CHECK(identical_mat(*mat, *all).empty());
+}
+
+} // namespace
+
+TEST_CASE("A tangency a cluster radius from a tangent join", "[M5][RB-03][EV-12]")
+{
+    // From a 40,000-segment star: a slit's end arc touches the nearly parallel side of the next
+    // spike 9e-10 from the arc's join with its own side, and the contact and the join's split form
+    // one cluster. The tangent ports' directions are known only to the cluster's spread over the
+    // arc's radius.
+    check_star_piece("near-tangent-slit.json", 2.8452320593455993);
+}
+
+TEST_CASE("A fast shock reaching a cluster within its time window", "[M5][RB-02][RB-03][EV-12]")
+{
+    // From a 100,000-segment star: a triangle of fronts vanishes at one point, but the shock between
+    // its two nearly parallel sides moves so fast that at t* it is 3e-7 short of the point. It must
+    // still die there, or the triangle is rebuilt at the same time for ever.
+    check_star_piece("fast-shock-triangle.json", 2.9487482310792807);
 }
 
 TEST_CASE("Degeneracy suite", "[M5][RB-02][RB-03][RB-04][EV-12][VER-03][VER-06]")
