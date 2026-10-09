@@ -1,0 +1,31 @@
+name: Spec tag
+
+# Tags main as spec-vX.Y when docs/spec.md lands with a version that has no tag yet.
+on:
+  push:
+    branches: [main]
+    paths: [docs/spec.md]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  tag:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Create the tag if missing
+        run: |
+          version=$(sed -n 's/^version: *"\([0-9][0-9.]*\)".*/\1/p' docs/spec.md | head -n1)
+          if [ -z "$version" ]; then echo "no version in docs/spec.md" >&2; exit 1; fi
+          tag="spec-v$version"
+          if git rev-parse -q --verify "refs/tags/$tag" >/dev/null; then
+            echo "$tag already exists"; exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898283+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$tag" -m "Specification version $version" "$GITHUB_SHA"
+          git push origin "$tag"

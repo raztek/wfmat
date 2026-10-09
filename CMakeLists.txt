@@ -22,6 +22,7 @@ endif()
 
 add_library(wfmat
     src/geom.cpp
+    src/kernel.cpp
     src/region.cpp
     src/prepare.cpp
     src/validate.cpp)
