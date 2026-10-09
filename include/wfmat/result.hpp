@@ -9,7 +9,7 @@
 
 namespace wfmat {
 
-// unsupported: valid input that needs a later milestone (arcs before M3, clusters before M5).
+// [API-03] unsupported: valid input that needs a later milestone (arcs before M3, clusters before M5).
 enum class ErrorCode { invalid_input, numerical_failure, invariant_violation, unsupported };
 
 struct Error {
