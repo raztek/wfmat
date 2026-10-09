@@ -89,7 +89,8 @@ std::optional<double> regular_hit_time(Vec2 q0, Vec2 m, const Site& s, double t_
 // [KN-05] First contact of two fronts along a common normal (an E3 candidate).
 struct Contact {
     double t = 0.0;
-    Vec2 p;                  // meeting point; for a plateau, the axis point nearest the origin
+    Vec2 p;                  // meeting point; plateau: the midline point nearest the origin (lines)
+                             // or the common centre (arcs)
     std::array<Vec2, 2> feet;
     bool plateau = false;    // antiparallel lines or concentric circles: a whole curve meets at once
 };
