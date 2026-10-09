@@ -170,13 +170,13 @@ Result<PreparedRegion> prepare(const Region& region, const Options& options)
         rev.reserve(n);
         for (std::size_t k = 0; k < n; ++k) {
             rev.push_back(segs[n - 1 - k].reversed());
-            sources[k] = {static_cast<std::uint32_t>(n - 1 - k)};
+            sources[k].assign(1, static_cast<std::uint32_t>(n - 1 - k));
         }
         segs = std::move(rev);
         out.reversed = true;
         area = -area;
     } else {
-        for (std::size_t k = 0; k < n; ++k) sources[k] = {static_cast<std::uint32_t>(k)};
+        for (std::size_t k = 0; k < n; ++k) sources[k].assign(1, static_cast<std::uint32_t>(k));
     }
     out.area = area;
 

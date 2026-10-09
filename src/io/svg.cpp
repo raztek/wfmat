@@ -88,7 +88,10 @@ void SvgWriter::disk(Vec2 centre, double r, std::string_view css_class)
 void SvgWriter::polyline(std::span<const Vec2> points, std::string_view css_class)
 {
     body_ += "<polyline class=\"" + std::string(css_class) + "\" points=\"";
-    for (std::size_t i = 0; i < points.size(); ++i) body_ += (i ? " " : "") + xy(points[i]);
+    for (std::size_t i = 0; i < points.size(); ++i) {
+        if (i) body_ += ' ';
+        body_ += xy(points[i]);
+    }
     body_ += "\"/>\n";
 }
 
