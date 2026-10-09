@@ -1,0 +1,13 @@
+{
+  "name": "wfmat",
+  "version-semver": "0.1.0",
+  "description": "Wavefront medial axis transform of regions bounded by lines and circular arcs",
+  "dependencies": [
+    "boost-geometry",
+    "boost-math",
+    "boost-multiprecision",
+    "nlohmann-json",
+    "tl-expected",
+    "catch2"
+  ]
+}

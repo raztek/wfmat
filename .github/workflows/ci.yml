@@ -1,0 +1,67 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gcc-13 (system packages)
+            os: ubuntu-24.04
+            cxx: g++-13
+            packages: libboost-dev nlohmann-json3-dev catch2
+            fetch: OFF
+          - name: clang-18 (system packages)
+            os: ubuntu-24.04
+            cxx: clang++-18
+            packages: libboost-dev nlohmann-json3-dev catch2
+            fetch: OFF
+          - name: gcc-12 (fetched dependencies)
+            os: ubuntu-22.04
+            cxx: g++-12
+            packages: g++-12
+            fetch: ON
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install packages
+        run: sudo apt-get update && sudo apt-get install -y ninja-build ${{ matrix.packages }}
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=${{ matrix.cxx }}
+          -DWFMAT_WERROR=ON -DWFMAT_FETCH_DEPS=${{ matrix.fetch }}
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+      - name: Render canonical shapes
+        run: for f in tests/data/*.json; do ./build/wfmat-cli "$f" --svg "build/$(basename "$f" .json).svg"; done
+      - uses: actions/upload-artifact@v4
+        if: matrix.name == 'gcc-13 (system packages)'
+        with:
+          name: canonical-shapes-svg
+          path: build/*.svg
+
+  windows:
+    name: msvc (vcpkg)
+    runs-on: windows-2022
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ilammy/msvc-dev-cmd@v1
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja -DCMAKE_BUILD_TYPE=Release
+          -DCMAKE_TOOLCHAIN_FILE="$env:VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake"
+      - name: Build
+        run: cmake --build build
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
