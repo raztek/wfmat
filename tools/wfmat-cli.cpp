@@ -1,5 +1,6 @@
-// wfmat-cli: validate a region given as bulge JSON and render it to SVG [API-03].
-// The MAT computation joins in later milestones.
+// wfmat-cli: validate a region given as bulge JSON, compute its MAT and render both to SVG
+// [API-03]. Input the engine does not handle yet (arcs before M3, clusters before M5) is reported
+// and rendered without its MAT.
 
 #include <cstdio>
 #include <fstream>
@@ -9,6 +10,7 @@
 
 #include "wfmat/io/json.hpp"
 #include "wfmat/io/svg.hpp"
+#include "wfmat/mat.hpp"
 #include "wfmat/prepare.hpp"
 
 namespace {
@@ -60,9 +62,23 @@ int main(int argc, char** argv)
                 reflex, region->area * scale * scale, doc->units.empty() ? "" : " ", doc->units.c_str(), doc->units.empty() ? "" : "^2",
                 region->reversed ? "clockwise (reversed)" : "counter-clockwise");
 
+    auto mat = wfmat::compute_mat(*region);
+    if (mat) {
+        const auto& st = mat->stats();
+        std::printf("MAT: %zu vertices, %zu edges; events: %zu collapses, %zu transitions, %zu splits, %zu contacts, "
+                    "%zu loops vanished\n",
+                    mat->vertices().size(), mat->edges().size(), st.collapses, st.transitions, st.splits, st.contacts,
+                    st.annihilations);
+    } else if (mat.error().code == wfmat::ErrorCode::unsupported) {
+        std::printf("MAT: not computed yet: %s\n", wfmat::to_string(mat.error()).c_str());
+    } else {
+        std::cerr << input << ": " << wfmat::to_string(mat.error()) << "\n";
+        return 1;
+    }
+
     if (!svg_path.empty()) {
         std::ofstream out(svg_path, std::ios::binary);
-        out << wfmat::io::render_svg(*region);
+        out << (mat ? wfmat::io::render_svg(*region, *mat) : wfmat::io::render_svg(*region));
         if (!out) {
             std::cerr << "cannot write " << svg_path << "\n";
             return 1;

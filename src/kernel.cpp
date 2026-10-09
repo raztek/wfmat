@@ -214,7 +214,7 @@ Root3 refine(const std::array<Site, 3>& sites, Root3 root, bool quad_precision)
     return root;
 }
 
-Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, const Tolerances& tol)
+Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, const Tolerances& tol, double t_max)
 {
     const std::array<Site, 3> sites{a, b, c};
     const std::array<Equation, 3> eq{equation(a), equation(b), equation(c)};
@@ -287,6 +287,11 @@ Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, co
 
         Root3 r = refine(sites, make_root(sites, {z.x, z.y}, z.t, condition), false);
         r.condition = std::max(r.condition, condition);
+        // A root well in the past cannot move into the window by refinement: its double error is
+        // about condition * eps. Skip the binary128 pass for it.
+        // Likewise a root far beyond t_max.
+        if (std::isfinite(r.t) && r.t + 1e-15 * r.condition * (1.0 + std::abs(r.t)) < t_now - tol.time) continue;
+        if (std::isfinite(r.t) && r.t - 1e-15 * r.condition * (1.0 + std::abs(r.t)) > t_max) continue;
         if (r.condition > quad_threshold) {
             const double cond = r.condition;
             r = refine(sites, r, true);
@@ -294,7 +299,7 @@ Solve3 solve_three(const Site& a, const Site& b, const Site& c, double t_now, co
         }
 
         if (!is_finite(r.p) || !std::isfinite(r.t)) continue;
-        if (r.t < t_now - tol.time) continue;
+        if (r.t < t_now - tol.time || r.t > t_max) continue;
         bool ok = true;
         for (const Site& s : sites) {
             if (!s.is_line() && s.offset_radius(r.t) < -tol.geom) ok = false;

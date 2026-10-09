@@ -7,7 +7,7 @@ macro(wfmat_find_or_fetch)
     endif()
 endmacro()
 
-# Boost (header-only parts: Geometry, Multiprecision, Math).
+# Boost (header-only parts: Geometry, Multiprecision, Math; Polygon for the test oracle).
 add_library(wfmat_boost INTERFACE)
 wfmat_find_or_fetch(Boost 1.81 CONFIG)
 if(TARGET Boost::headers)
@@ -18,7 +18,7 @@ else()
     wfmat_find_or_fetch(boost_math 1.81 CONFIG)
     if(NOT (TARGET Boost::geometry AND TARGET Boost::multiprecision AND TARGET Boost::math))
         message(STATUS "wfmat: fetching Boost")
-        set(BOOST_INCLUDE_LIBRARIES geometry multiprecision math)
+        set(BOOST_INCLUDE_LIBRARIES geometry multiprecision math polygon)
         set(BOOST_ENABLE_CMAKE ON)
         FetchContent_Declare(Boost
             URL https://github.com/boostorg/boost/releases/download/boost-1.84.0/boost-1.84.0.tar.xz
@@ -29,6 +29,16 @@ else()
         FetchContent_MakeAvailable(Boost)
     endif()
     target_link_libraries(wfmat_boost INTERFACE Boost::geometry Boost::multiprecision Boost::math)
+endif()
+
+# Boost.Polygon's Voronoi diagram is the [VER-03] oracle of the tests.
+add_library(wfmat_boost_polygon INTERFACE)
+target_link_libraries(wfmat_boost_polygon INTERFACE wfmat_boost)
+if(WFMAT_BUILD_TESTS AND NOT TARGET Boost::headers)
+    if(NOT TARGET Boost::polygon)
+        find_package(boost_polygon 1.81 CONFIG REQUIRED)
+    endif()
+    target_link_libraries(wfmat_boost_polygon INTERFACE Boost::polygon)
 endif()
 
 # tl::expected (CC0): an installed package, else the vendored single header in third_party/.

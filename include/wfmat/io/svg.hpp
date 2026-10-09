@@ -6,6 +6,7 @@
 #include <string_view>
 
 #include "wfmat/geom.hpp"
+#include "wfmat/mat.hpp"
 #include "wfmat/prepare.hpp"
 
 namespace wfmat::io {
@@ -22,6 +23,7 @@ public:
 
     void boundary(const PreparedRegion& region);   // lines and arcs, mapped back from the unit frame
     void joins(const PreparedRegion& region);
+    void medial_axis(const MedialAxis& mat, int samples_per_edge = 32);  // edges as polylines
     void disk(Vec2 centre, double r, std::string_view css_class = "disk");
     void polyline(std::span<const Vec2> points, std::string_view css_class = "curve");
     void point(Vec2 p, std::string_view css_class = "point");
@@ -37,6 +39,9 @@ private:
 
 // Boundary and joins of a prepared region.
 std::string render_svg(const PreparedRegion& region, const SvgOptions& options = {});
+
+// Boundary, joins and the medial axis.
+std::string render_svg(const PreparedRegion& region, const MedialAxis& mat, const SvgOptions& options = {});
 
 // Caller-frame bounding box of a prepared region.
 Box caller_bbox(const PreparedRegion& region);
