@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(wfmat VERSION 0.1.0 LANGUAGES CXX
+project(wfmat VERSION 1.0.0 LANGUAGES CXX
         DESCRIPTION "Wavefront medial axis transform of regions bounded by lines and circular arcs")
 
 option(WFMAT_BUILD_TESTS "Build the test suite" ${PROJECT_IS_TOP_LEVEL})
@@ -31,7 +31,9 @@ add_library(wfmat
     src/prepare.cpp
     src/validate.cpp)
 add_library(wfmat::wfmat ALIAS wfmat)
-target_include_directories(wfmat PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>)
+configure_file(cmake/version.hpp.in ${CMAKE_CURRENT_BINARY_DIR}/include/wfmat/version.hpp @ONLY)
+target_include_directories(wfmat PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+                                        $<BUILD_INTERFACE:${CMAKE_CURRENT_BINARY_DIR}/include>)
 target_link_libraries(wfmat PUBLIC tl::expected PRIVATE wfmat_boost wfmat_options)
 target_compile_features(wfmat PUBLIC cxx_std_20)
 
@@ -44,6 +46,8 @@ target_link_libraries(wfmat_io PUBLIC wfmat PRIVATE nlohmann_json::nlohmann_json
 if(WFMAT_BUILD_TOOLS)
     add_executable(wfmat-cli tools/wfmat-cli.cpp)
     target_link_libraries(wfmat-cli PRIVATE wfmat_io wfmat_options)
+    add_executable(wfmat-example examples/basic.cpp)
+    target_link_libraries(wfmat-example PRIVATE wfmat wfmat_options)
 endif()
 
 if(WFMAT_BUILD_TESTS)

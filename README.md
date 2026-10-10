@@ -6,7 +6,8 @@ bounded by one closed loop of line segments and circular arcs.
 The design and specification live in [`docs/spec.md`](docs/spec.md) (Markdown with LaTeX maths);
 this repository is the master copy. `bash docs/build-pdf.sh` rebuilds
 `docs/Wavefront-MAT-Spec-v<version>.pdf` (needs pandoc, Node and Playwright with Chromium).
-Each approved spec version is tagged `spec-vX.Y`.
+Each approved spec version is tagged `spec-vX.Y`. The public API is documented in
+[`docs/api.md`](docs/api.md).
 
 ## Status
 
@@ -35,8 +36,12 @@ Each approved spec version is tagged `spec-vX.Y`.
 - M6 (performance): non-local events come from a windowed R-tree broad phase
   (`BroadPhase::windowed_rtree`, the default), which processes exactly the events of the
   all-pairs mode, bit for bit, and is 10 to 200 times faster on 1,000 segments. The event heap
-  drops stale events in bulk. The spec's speed targets are not met yet; spec 1.4, section 9, lists
-  the measured times.
+  drops stale events in bulk. The spec's speed targets are not met yet; section 9 of the spec lists
+  the measured times, and milestone M8 is to close the gap.
+- M7 (release, version 1.0.0): edges exported exactly as rational quadratic Bézier arcs and
+  flattened to a chord tolerance, inward offsets from the front at any distance, MAT JSON output,
+  an SVG with the axis coloured by radius and the offsets, CLI options for all of these, and the
+  API documentation. Merging a project version of 1.0.0 or later tags `vX.Y.Z`.
 
 `ErrorCode::unsupported` is now only the code for valid input that a later milestone handles;
 no input currently gets it. See section 13 of the spec.
@@ -49,7 +54,7 @@ CMake 3.25 or newer and a C++20 compiler (GCC 12+, Clang 15+, MSVC 19.36+).
 cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build
 ctest --test-dir build --output-on-failure
-./build/wfmat-cli tests/data/equilateral-triangle.json --svg triangle.svg
+./build/wfmat-cli tests/data/l-shape.json --svg l-shape.svg --json l-shape.json --flatten 0.1 --offset 5
 ```
 
 Dependencies are found as installed packages (a vcpkg manifest is provided: pass
@@ -86,10 +91,11 @@ fast-math [LIB-03].
 | `include/wfmat/` | public headers: `geom`, `region`, `options`, `result`, `prepare`, `kernel`, `mat`, `validate`, `io/json`, `io/svg` |
 | `src/` | library sources (`wfmat` core with the engine in `engine.cpp` and cluster resolution in `cluster.cpp`, `wfmat_io` for JSON and SVG) |
 | `tools/wfmat-cli.cpp` | command-line tool |
+| `examples/basic.cpp` | the API example (`wfmat-example`) |
 | `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes and kernel fixtures |
 | `bench/` | Google Benchmark suite (`wfmat-bench`) and its scaled shape families |
 | `tools/fixtures/` | fixture generator for the kernel tests (SymPy, `gen_kernel_fixtures.py`) |
-| `docs/` | specification sources and PDF |
+| `docs/` | specification sources and PDF, API documentation (`api.md`) |
 
 ## Tests and requirement IDs
 

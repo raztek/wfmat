@@ -92,15 +92,15 @@ Engine::~Engine() = default;
 
 // [ALG-04] The main loop: a single event goes to its handler in section 6, a cluster (or a plateau,
 // or any event when resolve_all_events is set) to the generic resolution of section 8.
-Result<void> Engine::run()
+Result<void> Engine::run(double stop)
 {
     if (auto r = initialise(); !r) return r;
     for (;;) {
         if (windowed_ && (queue_.empty() || queue_.top().t > win_hi_)) {
-            if (!open_window()) break;
+            if (win_hi_ >= stop || !open_window()) break;
             continue;
         }
-        if (queue_.empty()) break;
+        if (queue_.empty() || queue_.top().t > stop) break;
         if (queue_.size() > compact_at_) compact_queue();
         const Event ev = queue_.top();
         queue_.pop();
@@ -124,7 +124,29 @@ Result<void> Engine::run()
         if (debug_)
             if (auto c = check_invariants(); !c) return c;
     }
+    if (stop < unbounded) return {};
     return finish();
+}
+
+std::vector<std::vector<Engine::FrontPiece>> Engine::front_at(double t) const
+{
+    std::vector<std::vector<FrontPiece>> loops;
+    std::vector<char> seen(elements_.size(), 0);
+    for (std::uint32_t start = 0; start < elements_.size(); ++start) {
+        if (!elements_[start].alive || seen[start]) continue;
+        std::vector<FrontPiece> loop;
+        for (std::uint32_t e = start; !seen[e]; e = next_element(e)) {
+            seen[e] = 1;
+            const FrontElement& el = elements_[e];
+            const auto a = position(el.prev, t), b = position(el.next, t);
+            if (!a || !b) continue;
+            FrontPiece piece{el.site, *a, *b, false};
+            if (next_element(e) == e) piece.full = true;
+            loop.push_back(piece);
+        }
+        if (!loop.empty()) loops.push_back(std::move(loop));
+    }
+    return loops;
 }
 
 // [ALG-03] One element per site in boundary order, a point element at every reflex corner, a

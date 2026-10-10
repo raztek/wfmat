@@ -9,3 +9,4 @@
 #include "wfmat/region.hpp"
 #include "wfmat/result.hpp"
 #include "wfmat/validate.hpp"
+#include "wfmat/version.hpp"
