@@ -114,7 +114,17 @@ public:
     Engine(const PreparedRegion& region, const Options& options);
     ~Engine();
 
-    Result<void> run();
+    // Runs to the end, or, with a finite stop, through every event up to that time [ALG-06].
+    Result<void> run(double stop = std::numeric_limits<double>::infinity());
+
+    // [ALG-06] The front at time t, after run(t): one list per loop of the live part of each
+    // element, from its start to its end in the direction of travel, in the unit frame.
+    struct FrontPiece {
+        SiteId site = 0;
+        Vec2 a, b;
+        bool full = false;  // a whole circle (a loop of one element)
+    };
+    std::vector<std::vector<FrontPiece>> front_at(double t) const;
 
     // Results, in the unit frame.
     struct OutVertex {

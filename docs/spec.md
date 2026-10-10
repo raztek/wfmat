@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 1.4 · 9 October 2026 · michael"
-version: "1.4"
+subtitle: "Version 1.5 · 10 October 2026 · michael"
+version: "1.5"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 1.5 | 2026-10-10 | minor revision | OUT-05, API-02: Bézier export as a list of arcs, each turning by less than a right angle, and the flattening rule; OUT-06: the MAT JSON layout; ALG-06, API-02: `inward_offset` as implemented in M7; API-03: CLI options; section 13: the PF-02 targets move from M6 to a new milestone, M8 |
 | 1.4 | 2026-10-09 | minor revision | EV-11, EV-12, RB-01: the windowed broad phase as implemented in M6 (window choice, split candidates, event identity in the queue order); PF-01: heap compaction rule; RB-03: tangent ports compared within the cluster's spread, fast shocks die if they pass through $D$ within $\varepsilon_t$; PF-02: times measured in M6; VER-07: benchmark families |
 | 1.3 | 2026-10-09 | minor revision | EV-04: a circle front can also reach a regular vertex; RB-02, RB-03: cluster radius, port ordering and vertex kinds as implemented in M5; RB-04 and API: `resolve_all_events` option for the cross-check |
 | 1.2 | 2026-10-09 | minor revision | API-03: error code `unsupported` for valid input that a later milestone handles |
@@ -135,9 +136,9 @@ $$
 
 $f_A$ and $f_B$ are the contact (foot) points on the two sites; the inscribed disk of radius $r$ at $p(r)$ touches the boundary exactly there.
 
-**[OUT-05] Evaluation API.** For every edge: position, radius, unit tangent, both feet at a given $r$; arc-length sampling; adaptive flattening to a polyline within a chord tolerance; and exact export as a rational quadratic Bézier (every conic arc has one), with $r$ supplied as a separate per-edge function since it is not polynomial in the Bézier parameter.
+**[OUT-05] Evaluation API.** For every edge: position, radius, unit tangent, both feet at a given $r$; arc-length sampling; adaptive flattening to a polyline within a chord tolerance; and exact export as rational quadratic Bézier arcs, with $r$ supplied as a separate per-edge function since it is not polynomial in the Bézier parameter. An edge is exported as one arc per piece that turns by less than a right angle, so every weight is positive; a piece's control point is where its end tangents meet, and its weight follows from one interior point. Flattening subdivides in the edge parameter $u$ until the middle and quarter points of every piece lie within 0.7 of the chord tolerance of their chord.
 
-**[OUT-06] Formats.** C++ object graph (primary), JSON (vertices, edges, conic parameters, sampled polylines), and SVG for inspection, showing the boundary, MAT edges coloured by $r$ and optional inscribed disks.
+**[OUT-06] Formats.** C++ object graph (primary), JSON (sites, vertices with their contacts, edges with their conic kind, radii, Bézier arcs and optional flattened polylines, inward offsets as bulge loops, and the run statistics), and SVG for inspection, showing the boundary, MAT edges coloured by $r$, inward offsets and optional inscribed disks.
 
 **Guarantees (checked by the validator in section 12)**
 
@@ -179,7 +180,7 @@ finalize_open_edges();                        // all loops empty; every MAT edge
 
 **[ALG-05] Termination.** Every event creates at least one MAT vertex and the MAT has $O(n)$ vertices, so there are $O(n)$ events. The simulation ends when every loop is empty, at $t = \max r$, the radius of the largest inscribed disk.
 
-**[ALG-06] By-product.** Snapshotting the front at any $t$ yields the exact inward offset curve of $\Omega$ at distance $t$ as lines and arcs, at no extra cost.
+**[ALG-06] By-product.** Snapshotting the front at any $t$ yields the exact inward offset curve of $\Omega$ at distance $t$ as lines and arcs, at no extra cost: the engine processes every event up to $t$ and writes each loop's live elements between their vertices' positions as a counter-clockwise bulge loop. Pieces shorter than $\varepsilon_{\text{len}}$ are dropped, so the offset at $t = 0$ is the boundary and past the largest inscribed radius it is empty.
 
 ## 6. Events and handlers
 
@@ -318,9 +319,9 @@ Measured in M6 (release build, one core of the CI-class cloud machine, `compute_
 | Spiky star | 120 ms | 15 s | 10 min at 50,000 |
 | Gear | 530 ms | over 15 min | 17 s at 4,000 |
 
-The broad phase meets the identical-sequence requirement [EV-12] but not these targets: the boxes of neighbours on the same smooth curve overlap in every window, and fronts that converge on one point (gears, regular polygons) make every pair a candidate. Closing the gap is follow-up work.
+The broad phase meets the identical-sequence requirement [EV-12] but not these targets: the boxes of neighbours on the same smooth curve overlap in every window, and fronts that converge on one point (gears, regular polygons) make every pair a candidate. Closing the gap is milestone M8.
 
-The filleted star of 100,000 segments still fails: its spikes are so thin that near-flat fillet arcs face nearly parallel sides, and the shocks between them are fast and ill-conditioned enough to leave two-element loops that never close, or links that fail RB-03. Two such cases from 40,000 and 100,000 segments are fixed and kept as regression shapes; the rest is follow-up work on the conditioning of fast shocks.
+The filleted star of 100,000 segments still fails: its spikes are so thin that near-flat fillet arcs face nearly parallel sides, and the shocks between them are fast and ill-conditioned enough to leave two-element loops that never close, or links that fail RB-03. Two such cases from 40,000 and 100,000 segments are fixed and kept as regression shapes; the rest belongs to M8.
 
 The targets are budgets for v1 to be measured against, not results; the benchmark suite in section 12 tracks them. Parallelism is out of scope for v1, because the event order is inherently sequential; batch processing of many shapes is parallel by construction, since runs share no state.
 
@@ -370,7 +371,7 @@ public:
     double radius_at(double u) const;
     Vec2 tangent_at(double u) const;
     std::pair<Vec2, Vec2> feet_at(double u) const;     // contact points on left, right
-    RationalQuadBezier bezier() const;                 // exact conic arc
+    std::vector<RationalQuadBezier> bezier() const;    // exact conic arcs, each < 90 degrees
     void flatten(double chord_tol, std::vector<Vec2>& out) const;
 };
 
@@ -384,11 +385,12 @@ public:
 
 Result<MedialAxis> compute_mat(const Region&, const Options& = {});
 Result<std::vector<Loop>> inward_offset(const Region&, double distance, const Options& = {});
+// also for a PreparedRegion; std::string io::write_mat_json(mat, offsets, {units, chord_tol});
 
 } // namespace wfmat
 ```
 
-**[API-03]** `Result<T>` is `tl::expected<T, Error>`, keeping the C++20 baseline (it maps directly onto `std::expected` if the project later moves to C++23); `Error` carries a code (`invalid_input`, `numerical_failure`, `invariant_violation`, or `unsupported` for valid input that the current milestone does not yet handle, with the milestone that will in the error's requirement field), the offending loop and segment, and the path of the diagnostic dump if one was written. All output coordinates and radii are in the caller's units; normalisation is internal. A command-line tool, `wfmat-cli`, wraps `compute_mat` for JSON in, JSON and SVG out.
+**[API-03]** `Result<T>` is `tl::expected<T, Error>`, keeping the C++20 baseline (it maps directly onto `std::expected` if the project later moves to C++23); `Error` carries a code (`invalid_input`, `numerical_failure`, `invariant_violation`, or `unsupported` for valid input that the current milestone does not yet handle, with the milestone that will in the error's requirement field), the offending loop and segment, and the path of the diagnostic dump if one was written. All output coordinates and radii are in the caller's units; normalisation is internal. A command-line tool, `wfmat-cli`, wraps `compute_mat` and `inward_offset` for JSON in, JSON and SVG out: `--json`, `--svg`, `--flatten <tolerance>`, `--offset <distance>` (repeatable) and `--version`. `docs/api.md` documents the public API.
 
 ## 11. Libraries and licensing
 
@@ -444,7 +446,7 @@ Every test cites the requirement identifiers it verifies. Correctness is establi
 
 ## 13. Milestones
 
-Implementation proceeds in seven v1 increments (M4, holes, moves to v2), each closed by an exit test, so that the hardest parts (arcs, clusters) land on a validated base; no dates are set yet.
+Implementation proceeds in seven increments up to the v1.0 release and one after it (M4, holes, moves to v2), each closed by an exit test, so that the hardest parts (arcs, clusters) land on a validated base; no dates are set yet.
 
 1. **M0 Scaffold.** CMake project, geom, input validation and normalisation, JSON reader, SVG writer, brute-force distance validator. Exit: all canonical shapes load, validate and render.
 2. **M1 Kernel.** Site equations, three-site solve, trajectories, contact times, binary128 refinement. Exit: kernel unit tests pass against the SymPy fixtures.
@@ -452,8 +454,9 @@ Implementation proceeds in seven v1 increments (M4, holes, moves to v2), each cl
 4. **M3 Arcs.** Convex and concave arcs, tangent joins, E1c. Exit: canonical arc shapes and the sampling oracle.
 5. **M4 Holes (v2).** Multiple loops and loop merges. Exit: Betti-number check and annulus tests.
 6. **M5 Degeneracies.** Cluster resolution and plateau edges. Exit: degeneracy suite passes; simple handlers agree with cluster resolution.
-7. **M6 Performance.** Windowed R-tree broad phase, heap compaction. Exit: identical event sequences to all-pairs mode; section 9 targets met.
-8. **M7 Release.** Bézier export, flattening, inward offsets, CLI, API documentation. Exit: v1.0 tag.
+7. **M6 Performance.** Windowed R-tree broad phase, heap compaction. Exit: identical event sequences to all-pairs mode. Merged with the section 9 targets still missed, which move to M8 (decided 10 October 2026).
+8. **M7 Release.** Bézier export, flattening, inward offsets, CLI, API documentation. Exit: v1.0 tag, created by CI when the project version on main reaches 1.0.0.
+9. **M8 Performance II (v1.x).** A candidate pre-pass that does not degrade on converging fronts (for example a Voronoi or Delaunay diagram of a boundary sampling), and better conditioning of fast shocks between near-parallel fronts. Exit: section 9 targets met, and the 100,000-segment filleted star passes.
 
 ## 14. Decisions and risks
 

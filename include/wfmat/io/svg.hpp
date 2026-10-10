@@ -8,6 +8,7 @@
 #include "wfmat/geom.hpp"
 #include "wfmat/mat.hpp"
 #include "wfmat/prepare.hpp"
+#include "wfmat/region.hpp"
 
 namespace wfmat::io {
 
@@ -15,6 +16,7 @@ struct SvgOptions {
     double width_px = 800.0;   // rendered width; height follows the aspect ratio
     double margin = 0.05;      // fraction of the larger extent added on every side
     bool show_joins = true;    // mark joins by kind: convex, tangent, reflex
+    bool colour_by_radius = true;  // MAT edges from blue (small r) to red (the largest r)
 };
 
 class SvgWriter {
@@ -23,7 +25,8 @@ public:
 
     void boundary(const PreparedRegion& region);   // lines and arcs, mapped back from the unit frame
     void joins(const PreparedRegion& region);
-    void medial_axis(const MedialAxis& mat, int samples_per_edge = 32);  // edges as polylines
+    void medial_axis(const MedialAxis& mat);       // edges flattened to a fraction of a pixel
+    void loops(std::span<const Loop> loops, std::string_view css_class = "offset");  // lines and arcs
     void disk(Vec2 centre, double r, std::string_view css_class = "disk");
     void polyline(std::span<const Vec2> points, std::string_view css_class = "curve");
     void point(Vec2 p, std::string_view css_class = "point");

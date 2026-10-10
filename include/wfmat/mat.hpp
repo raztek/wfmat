@@ -51,6 +51,21 @@ struct MatVertex {
     std::vector<EdgeId> edges;  // counter-clockwise around p
 };
 
+// [OUT-05] A rational quadratic Bezier arc, (1-s)^2 p0 + 2 s (1-s) w p1 + s^2 p2 over
+// (1-s)^2 + 2 s (1-s) w + s^2, s in [0, 1]: w < 1 an ellipse, w = 1 a parabola, w > 1 a hyperbola.
+// It covers the edge parameters [u0, u1]; the radius is not polynomial in s and comes from the edge.
+struct RationalQuadBezier {
+    Vec2 p0, p1, p2;
+    double w = 1.0;
+    double u0 = 0.0, u1 = 1.0;
+
+    Vec2 point(double s) const
+    {
+        const double a = (1 - s) * (1 - s), b = 2 * s * (1 - s) * w, c = s * s;
+        return (a * p0 + b * p1 + c * p2) / (a + b + c);
+    }
+};
+
 // [OUT-02], [OUT-04], [OUT-05] One MAT edge. u in [0, 1] maps linearly onto [r0, r1]; on a plateau
 // edge (r0 = r1) it maps linearly onto arc length instead.
 class MatEdge {
@@ -87,11 +102,17 @@ public:
     Vec2 tangent_at(double u) const;                // unit, along the direction of travel
     std::pair<Vec2, Vec2> feet_at(double u) const;  // contact points on the left and right sites
 
+    // The edge as rational quadratic arcs in order of u, each turning by less than a right angle.
+    std::vector<RationalQuadBezier> bezier() const;
+    // Appends a polyline from v0 to v1 whose chords stay within chord_tol of the edge.
+    void flatten(double chord_tol, std::vector<Vec2>& out) const;
+
 private:
     double t_at(double u) const { return d_.t0 + u * (d_.t1 - d_.t0); }
     Vec2 unit_point(double t) const;
     Vec2 plateau_point(double u) const;
     Vec2 unit_point_at(double u) const { return is_plateau() ? plateau_point(u) : unit_point(t_at(u)); }
+    Vec2 unit_tangent_at(double u) const;
 
     Data d_;
 };
@@ -138,5 +159,11 @@ private:
 // M3, simultaneous events and plateaus since M5).
 Result<MedialAxis> compute_mat(const Region& region, const Options& options = {});
 Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& options = {});
+
+// [ALG-06] The inward offset of the region at the given distance (caller units, >= 0): the front
+// of the grassfire at that time, as counter-clockwise loops of lines and arcs. Empty once the
+// distance passes the largest inscribed radius.
+Result<std::vector<Loop>> inward_offset(const Region& region, double distance, const Options& options = {});
+Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double distance, const Options& options = {});
 
 } // namespace wfmat
