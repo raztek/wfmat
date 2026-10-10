@@ -105,7 +105,8 @@ struct RunStats {
     std::size_t contacts = 0;           // E3 [EV-05]
     std::size_t annihilations = 0;      // loops that vanished [EV-08]
     std::size_t clusters = 0;           // resolved clusters [RB-03]
-    std::size_t stale_events = 0;       // discarded at pop time [EV-10]
+    std::size_t stale_events = 0;       // discarded at pop time or by heap compaction [EV-10]
+    std::size_t windows = 0;            // broad-phase windows opened [EV-11]
     double max_residual = 0.0;          // largest |d_i(p) - t| over event points, caller units
 };
 

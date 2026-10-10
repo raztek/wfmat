@@ -3,10 +3,31 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <iterator>
 #include <numbers>
 #include <string>
+#include <utility>
+
+#include <boost/geometry.hpp>
+#include <boost/geometry/index/rtree.hpp>
 
 namespace wfmat::detail {
+
+namespace bg = boost::geometry;
+namespace bgi = boost::geometry::index;
+
+struct BroadIndex {
+    using Point = bg::model::point<double, 2, bg::cs::cartesian>;
+    using BBox = bg::model::box<Point>;
+    using Item = std::pair<BBox, std::uint32_t>;
+
+    static BBox to_bbox(const Box& b) { return {Point(b.lo.x, b.lo.y), Point(b.hi.x, b.hi.y)}; }
+
+    explicit BroadIndex(const std::vector<Item>& items) : tree(items.begin(), items.end()) {}
+
+    bgi::rtree<Item, bgi::quadratic<16>> tree;
+    std::vector<Item> hits;
+};
 
 namespace {
 
@@ -18,6 +39,23 @@ constexpr double branch_probe = 1e-6;
 // Upper bound on any event time in the unit frame: an inscribed radius never exceeds the
 // half-diagonal of the bounding box, which is 1 [IN-07].
 constexpr double t_max = 1.5;
+
+// [EV-11] Window adaptation: the window doubles while it finds fewer candidate pairs per live
+// element than the lower bound and halves above the upper one.
+constexpr double sparse_pairs = 8.0;
+constexpr double dense_pairs = 64.0;
+// A window that handles fewer events than this fraction of the live elements also doubles.
+constexpr double quiet_events = 0.25;
+
+// Margin added to every broad-phase box, above the eps_geom slack of the live-part tests.
+constexpr double box_margin = 1e-8;
+
+double box_gap(const Box& a, const Box& b)
+{
+    const double dx = std::max({0.0, a.lo.x - b.hi.x, b.lo.x - a.hi.x});
+    const double dy = std::max({0.0, a.lo.y - b.hi.y, b.lo.y - a.hi.y});
+    return std::hypot(dx, dy);
+}
 
 // Distance within which the third vertex of a vanishing three-element loop must meet the other two.
 constexpr double annihilation_slack = 1e-7;
@@ -43,22 +81,34 @@ std::string point_text(Vec2 p, double t)
 }
 
 Engine::Engine(const PreparedRegion& region, const Options& options)
-    : region_(region), tol_(options.tol), debug_(options.debug_checks), resolve_all_(options.resolve_all_events)
+    : region_(region), tol_(options.tol), debug_(options.debug_checks), resolve_all_(options.resolve_all_events),
+      windowed_(options.broad_phase == BroadPhase::windowed_rtree)
 {
+    // No window is open yet: the first one opens before the first event [EV-11].
+    if (windowed_) win_hi_ = -unbounded;
 }
+
+Engine::~Engine() = default;
 
 // [ALG-04] The main loop: a single event goes to its handler in section 6, a cluster (or a plateau,
 // or any event when resolve_all_events is set) to the generic resolution of section 8.
 Result<void> Engine::run()
 {
     if (auto r = initialise(); !r) return r;
-    while (!queue_.empty()) {
+    for (;;) {
+        if (windowed_ && (queue_.empty() || queue_.top().t > win_hi_)) {
+            if (!open_window()) break;
+            continue;
+        }
+        if (queue_.empty()) break;
+        if (queue_.size() > compact_at_) compact_queue();
         const Event ev = queue_.top();
         queue_.pop();
         if (!valid(ev)) {
             ++stats.stale_events;
             continue;
         }
+        ++window_events_;
         const std::vector<Event> cluster = gather_cluster(ev);
         t_now_ = std::max(t_now_, ev.t);
         Result<void> r;
@@ -124,6 +174,7 @@ Result<void> Engine::initialise()
 
     const auto m = static_cast<std::uint32_t>(elements_.size());
     for (std::uint32_t e = 0; e < m; ++e) schedule_collapse(e);
+    if (windowed_) return {};  // non-local candidates come from the first window
     for (std::uint32_t v = 0; v < vertices_.size(); ++v)
         for (std::uint32_t e = 0; e < m; ++e) schedule_split(v, e);
     for (std::uint32_t x = 0; x < m; ++x)
@@ -289,22 +340,231 @@ void Engine::close_edge(std::uint32_t vertex, std::uint32_t mat_vertex, Vec2 p, 
     d.p1 = p;
 }
 
-void Engine::relabel_loop(std::uint32_t start)
+// [EV-09] After a split, every loop through one of the start elements gets a fresh id except
+// the largest, which keeps the old one. The walks advance in lockstep and stop when one loop is
+// left, so a split costs the size of its smaller loops and a run O(n log n) in all.
+void Engine::relabel_loops(const std::vector<std::uint32_t>& starts)
 {
-    const std::uint32_t id = next_loop_++;
-    std::uint32_t x = start;
-    do {
-        elements_[x].loop = id;
-        x = next_element(x);
-    } while (x != start);
+    ++epoch_;
+    if (mark_.size() < elements_.size()) mark_.resize(elements_.size(), 0);
+    auto owner = [&](std::uint32_t e) -> int {
+        return (mark_[e] >> 32) == epoch_ ? static_cast<int>(mark_[e] & 0xffffffffu) - 1 : -1;
+    };
+    auto mark = [&](std::uint32_t e, std::size_t w) {
+        mark_[e] = (std::uint64_t{epoch_} << 32) | static_cast<std::uint32_t>(w + 1);
+    };
+    struct Walk {
+        std::uint32_t start, at;
+        bool active;
+    };
+    std::vector<Walk> walks;
+    for (std::uint32_t s : starts) {
+        if (owner(s) >= 0) continue;
+        mark(s, walks.size());
+        walks.push_back({s, s, true});
+    }
+    std::size_t active = walks.size();
+    std::vector<std::uint32_t> closed;
+    while (active > 1) {
+        for (std::size_t w = 0; w < walks.size() && active > 1; ++w) {
+            Walk& k = walks[w];
+            if (!k.active) continue;
+            const std::uint32_t x = next_element(k.at);
+            const int o = owner(x);
+            if (x == k.start) {
+                closed.push_back(k.start);  // a whole loop, distinct from every other walk's
+                k.active = false;
+                --active;
+            } else if (o >= 0 && o != static_cast<int>(w) && walks[o].active) {
+                k.active = false;  // the loop of another walk
+                --active;
+            } else {
+                if (o < 0) mark(x, w);
+                k.at = x;
+            }
+        }
+    }
+    for (std::uint32_t start : closed) {
+        const std::uint32_t id = next_loop_++;
+        std::uint32_t x = start;
+        do {
+            elements_[x].loop = id;
+            x = next_element(x);
+        } while (x != start);
+    }
+}
+
+// [EV-11] The box of the live part of an element at time t: its two ends, and for a circle the
+// extreme points of the arc between them. A vertex without a position gives the whole frame.
+Box Engine::element_box(std::uint32_t e, double t) const
+{
+    const FrontElement& el = elements_[e];
+    const Site& s = sites[el.site];
+    const auto pl = position(el.prev, t), pr = position(el.next, t);
+    Box b;
+    if (!pl || !pr) {
+        b.add(Vec2{-4.0, -4.0});
+        b.add(Vec2{4.0, 4.0});
+        return b;
+    }
+    b.add(*pl);
+    b.add(*pr);
+    if (!s.is_line()) {
+        const Vec2 c = s.centre;
+        const double rho = std::max(s.offset_radius(t), 0.0);
+        auto angle = [&](Vec2 q) { return s.sigma * std::atan2(q.y - c.y, q.x - c.x); };
+        const double al = angle(*pl);
+        const double sweep = el.prev == el.next ? two_pi : wrap_2pi(angle(*pr) - al);
+        for (int k = 0; k < 4; ++k) {
+            const double phi = 0.5 * std::numbers::pi * k;
+            if (sweep >= two_pi - 1e-9 || wrap_2pi(s.sigma * phi - al) <= sweep) b.add(c + rho * polar(phi));
+        }
+    }
+    return b.inflated(cluster_radius() + box_margin);
+}
+
+// [EV-11] The first window: the median distance from an element to its nearest non-adjacent
+// element, or the median element size when most elements touch a non-neighbour.
+double Engine::initial_window() const
+{
+    std::vector<BroadIndex::Item> items;
+    std::vector<Box> boxes;
+    for (std::uint32_t e : live_) {
+        boxes.push_back(element_box(e, t_now_));
+        items.emplace_back(BroadIndex::to_bbox(boxes.back()), e);
+    }
+    const BroadIndex index(items);
+    std::vector<double> gaps, sizes;
+    std::vector<BroadIndex::Item> hits;
+    for (std::size_t i = 0; i < live_.size(); ++i) {
+        const std::uint32_t e = live_[i];
+        hits.clear();
+        index.tree.query(bgi::nearest(items[i].first, 6), std::back_inserter(hits));
+        double gap = unbounded;
+        for (const auto& [box, x] : hits) {
+            if (x == e || x == prev_element(e) || x == next_element(e)) continue;
+            gap = std::min(gap, box_gap(boxes[i], element_box(x, t_now_)));
+        }
+        if (std::isfinite(gap)) gaps.push_back(gap);
+        sizes.push_back(norm(boxes[i].extent()));
+    }
+    auto median = [](std::vector<double>& v) {
+        if (v.empty()) return 0.0;
+        std::nth_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(v.size() / 2), v.end());
+        return v[v.size() / 2];
+    };
+    double d = median(gaps);
+    if (d <= 0.0) d = median(sizes);
+    return std::clamp(d, 1e-6, t_max);
+}
+
+// [EV-11] Opens the window [lo, lo + Delta] at the end of the last one: indexes the live elements
+// by their boxes at lo inflated by Delta, and schedules every overlapping pair. Returns false when
+// no element is left or no event can be left to find.
+bool Engine::open_window()
+{
+    std::vector<std::uint32_t> live;
+    for (std::uint32_t e : live_)
+        if (elements_[e].alive) live.push_back(e);
+    for (std::size_t e = listed_; e < elements_.size(); ++e)
+        if (elements_[e].alive) live.push_back(static_cast<std::uint32_t>(e));
+    listed_ = elements_.size();
+    live_.swap(live);
+    if (live_.empty()) return false;
+
+    const bool first = !index_;
+    const double lo = first ? t_now_ : win_hi_;
+    if (lo >= t_max) return false;
+    if (first) {
+        delta_ = initial_window();
+    } else {
+        // Grow a window that found few pairs or saw few events for its cost; shrink a crowded one.
+        const double m = static_cast<double>(live_.size());
+        const double per_element = static_cast<double>(window_pairs_) / m;
+        if (per_element < sparse_pairs || static_cast<double>(window_events_) < quiet_events * m)
+            delta_ *= 2.0;
+        else if (per_element > dense_pairs)
+            delta_ *= 0.5;
+    }
+    win_hi_ = lo + delta_;
+
+    std::vector<BroadIndex::Item> items;
+    items.reserve(live_.size());
+    window_box_.assign(elements_.size(), Box{});
+    for (std::uint32_t e : live_) {
+        window_box_[e] = element_box(e, lo).inflated(delta_);
+        items.emplace_back(BroadIndex::to_bbox(window_box_[e]), e);
+    }
+    index_ = std::make_unique<BroadIndex>(items);
+
+    // Events at or before lo were found by earlier windows.
+    push_floor_ = first ? -unbounded : lo;
+    window_pairs_ = 0;
+    window_events_ = 0;
+    std::vector<BroadIndex::Item>& hits = index_->hits;
+    for (const auto& [box, e] : items) {
+        hits.clear();
+        index_->tree.query(bgi::intersects(box), std::back_inserter(hits));
+        std::sort(hits.begin(), hits.end(), [](const auto& a, const auto& b) { return a.second < b.second; });
+        // The shock after e also moves along the next element, whose box must meet x's too.
+        const Box& after = window_box_[next_element(e)];
+        for (const auto& [other, x] : hits) {
+            if (x == e || elements_[x].loop != elements_[e].loop) continue;
+            ++window_pairs_;
+            if (e < x) schedule_contact(e, x);
+            if (overlap(after, window_box_[x])) schedule_split(elements_[e].next, x);
+        }
+    }
+    push_floor_ = -unbounded;
+    ++stats.windows;
+    return true;
+}
+
+// Adds an element created inside the window, with its box from now to the window's end.
+void Engine::index_element(std::uint32_t e)
+{
+    if (window_box_.size() <= e) window_box_.resize(elements_.size(), Box{});
+    if (!window_box_[e].empty()) return;
+    window_box_[e] = element_box(e, t_now_).inflated(win_hi_ - t_now_);
+    index_->tree.insert({BroadIndex::to_bbox(window_box_[e]), e});
+}
+
+// The live elements of the loop of element whose window boxes meet b; all of the loop, in loop
+// order from element, when the broad phase is all_pairs.
+void Engine::near_elements(const Box& b, std::uint32_t element, std::vector<std::uint32_t>& out)
+{
+    out.clear();
+    if (!windowed_) {
+        std::uint32_t x = element;
+        do {
+            out.push_back(x);
+            x = next_element(x);
+        } while (x != element);
+        return;
+    }
+    const std::uint32_t loop = elements_[element].loop;
+    std::vector<BroadIndex::Item>& hits = index_->hits;
+    hits.clear();
+    index_->tree.query(bgi::intersects(BroadIndex::to_bbox(b)), std::back_inserter(hits));
+    for (const auto& [box, x] : hits)
+        if (elements_[x].alive && elements_[x].loop == loop) out.push_back(x);
+    std::sort(out.begin(), out.end());
+}
+
+// [PF-01] Drops the stale events whenever the heap has doubled since the last compaction; validity
+// never returns once lost, so the order of the remaining events is unchanged.
+void Engine::compact_queue()
+{
+    stats.stale_events += queue_.remove_if([&](const Event& ev) { return !valid(ev); });
+    compact_at_ = std::max<std::size_t>(4096, 2 * queue_.size());
 }
 
 void Engine::push(Event ev)
 {
+    if (ev.kind != EventKind::collapse && (ev.t > win_hi_ || ev.t <= push_floor_)) return;
     ev.seq = seq_++;
+    // Only ids fixed for the event's lifetime: a vertex's neighbours change as they are replaced.
     ev.key = std::min(ev.elements[0], ev.elements[1]);
-    if (ev.vertex != no_id)
-        ev.key = std::min({ev.key, vertices_[ev.vertex].left, vertices_[ev.vertex].right});
     queue_.push(ev);
 }
 
@@ -389,7 +649,7 @@ void Engine::schedule_split(std::uint32_t v, std::uint32_t c)
     const SiteId sa = elements_[a].site, sb = elements_[b].site, sc = elements_[c].site;
     if (sc == sa || sc == sb) return;
 
-    const Solve3 sol = solve_three(sites[sa], sites[sb], sites[sc], t_now_, tol_, t_max);
+    const Solve3 sol = solve_three(sites[sa], sites[sb], sites[sc], t_from(), tol_, std::min(t_max, win_hi_));
     for (const Root3& root : sol.roots) {
         if (root.t < vx.t0 - tol_.time) continue;
         if (!branch_ok(v, root.p) || !live(c, root.p, root.t)) continue;
@@ -418,7 +678,7 @@ void Engine::schedule_regular_split(std::uint32_t g, std::uint32_t c)
     const SiteId sc = elements_[c].site;
     if (sc == elements_[a].site || sc == elements_[b].site) return;
 
-    const auto t = regular_hit_time(gv.p0, gv.m, sites[sc], t_now_, tol_);
+    const auto t = regular_hit_time(gv.p0, gv.m, sites[sc], t_from(), tol_);
     if (!t || *t < gv.t0 - tol_.time) return;
     const Vec2 q = gv.p0 + *t * gv.m;
     if (!live(c, q, *t)) return;
@@ -475,13 +735,14 @@ std::optional<std::pair<Vec2, Vec2>> Engine::plateau_ends(std::uint32_t x, std::
 // [EV-05], [KN-05] Two non-adjacent elements touch along a common normal.
 void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
 {
+    if (x > y) std::swap(x, y);  // one orientation per pair, whoever asks [EV-12]
     if (!elements_[x].alive || !elements_[y].alive) return;
     if (y == x || y == prev_element(x) || y == next_element(x)) return;
     if (elements_[x].loop != elements_[y].loop) return;
     const SiteId sx = elements_[x].site, sy = elements_[y].site;
     if (sx == sy) return;
 
-    for (const Contact& k : contacts(sites[sx], sites[sy], t_now_, tol_)) {
+    for (const Contact& k : contacts(sites[sx], sites[sy], t_from(), tol_)) {
         Event ev;
         ev.t = k.t;
         ev.p = k.p;
@@ -504,26 +765,45 @@ void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
     }
 }
 
-// The element's own collapse, every shock of its loop against it, and every contact with it.
+// The element's own collapse, and the shocks and contacts of the elements near it [EV-11]: a
+// shock that reaches e within the window moves along the front of its left element, whose box
+// therefore meets the box of e.
 void Engine::reschedule_element(std::uint32_t e)
 {
     schedule_collapse(e);
-    std::uint32_t x = e;
-    do {
+    if (!windowed_) {
+        near_elements({}, e, near_);
+        for (std::uint32_t x : near_) {
+            if (x != e) schedule_contact(e, x);
+            schedule_split(elements_[x].next, e);
+        }
+        return;
+    }
+    index_element(e);
+    const Box box = window_box_[e];
+    near_elements(box, e, near_);
+    for (std::uint32_t x : near_) {
         if (x != e) schedule_contact(e, x);
-        schedule_split(elements_[x].next, e);
-        x = next_element(x);
-    } while (x != e);
+        // The shock after x moves along both x and the element after it.
+        const std::uint32_t y = next_element(x);
+        index_element(y);
+        if (overlap(window_box_[y], box)) schedule_split(elements_[x].next, e);
+    }
 }
 
 void Engine::reschedule_vertex(std::uint32_t v)
 {
-    const std::uint32_t start = vertices_[v].left;
-    std::uint32_t x = start;
-    do {
-        schedule_split(v, x);
-        x = next_element(x);
-    } while (x != start);
+    const std::uint32_t a = vertices_[v].left, b = vertices_[v].right;
+    if (!windowed_) {
+        near_elements({}, a, near_);
+        for (std::uint32_t x : near_) schedule_split(v, x);
+        return;
+    }
+    index_element(a);
+    index_element(b);
+    near_elements(window_box_[a], a, near_);
+    for (std::uint32_t x : near_)
+        if (overlap(window_box_[b], window_box_[x])) schedule_split(v, x);
 }
 
 bool Engine::valid(const Event& ev) const
@@ -663,7 +943,7 @@ Result<void> Engine::handle_split(const Event& ev)
     elements_[b].prev = *y;
     ++elements_[a].version;
     ++elements_[b].version;
-    relabel_loop(c1);
+    relabel_loops({c1, c2});
     ++stats.splits;
 
     for (std::uint32_t e : {a, c2, b, c1}) reschedule_element(e);
@@ -704,7 +984,7 @@ Result<void> Engine::handle_contact(const Event& ev)
     elements_[y2].prev = *u;
     elements_[y1].next = *w;
     elements_[x2].prev = *w;
-    relabel_loop(y1);
+    relabel_loops({y1, x1});
     ++stats.contacts;
 
     for (std::uint32_t e : {x1, y2, y1, x2}) reschedule_element(e);

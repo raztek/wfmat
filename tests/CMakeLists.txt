@@ -10,7 +10,8 @@ add_executable(wfmat_tests
     test_kernel.cpp
     test_engine.cpp
     test_arcs.cpp
-    test_degenerate.cpp)
+    test_degenerate.cpp
+    test_broad_phase.cpp)
 target_link_libraries(wfmat_tests PRIVATE wfmat wfmat_io Catch2::Catch2WithMain nlohmann_json::nlohmann_json wfmat_boost_polygon wfmat_options)
 target_compile_definitions(wfmat_tests PRIVATE
     WFMAT_TEST_DATA="${CMAKE_CURRENT_SOURCE_DIR}/data"

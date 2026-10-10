@@ -222,6 +222,10 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     for (const Anchor& a : anchors) points.push_back(a.p);
 
     const double rho = cluster_radius();
+    // How far the points of a point cluster are from its anchor; a plateau's anchors are its ends.
+    double spread = rho;
+    if (!plateau)
+        for (Vec2 q : points) spread = std::max(spread, dist(q, anchors[0].p));
     auto gap = [&](Vec2 x) {
         double d = std::numeric_limits<double>::infinity();
         for (Vec2 q : points) d = std::min(d, dist(x, q));
@@ -235,22 +239,54 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         return best;
     };
 
-    // The loop, and its vertices: vertex i follows element i.
-    std::vector<std::uint32_t> elems, verts;
-    for (std::uint32_t x = start;;) {
-        elems.push_back(x);
-        verts.push_back(elements_[x].next);
-        x = next_element(x);
-        if (x == start) break;
+    // The elements whose live part comes near D [EV-11], in id order so that both broad phases
+    // see them in the same sequence, and their vertices.
+    Box reach;
+    for (Vec2 q : points) reach.add(q);
+    if (plateau) {
+        reach.add(element_box(px, t));
+        reach.add(element_box(py, t));
     }
+    reach = reach.inflated(std::max(rho, tangency_radius));
+    std::vector<std::uint32_t> elems;
+    near_elements(reach, start, elems);
+    std::erase_if(elems, [&](std::uint32_t e) { return !overlap(element_box(e, t), reach); });
+    std::sort(elems.begin(), elems.end());
     const std::size_t m = elems.size();
-    std::vector<char> dying(m, 0);
-    std::vector<int> vanchor(m, 0);
-    for (std::size_t i = 0; i < m; ++i) {
-        if (const auto q = position(verts[i], t); q && gap(*q) <= rho) {
+    std::vector<std::uint32_t> verts;
+    std::map<std::uint32_t, std::size_t> vindex;
+    for (std::uint32_t e : elems)
+        for (std::uint32_t v : {elements_[e].prev, elements_[e].next})
+            if (vindex.emplace(v, verts.size()).second) verts.push_back(v);
+    std::vector<char> dying(verts.size(), 0);
+    std::vector<int> vanchor(verts.size(), 0);
+    std::vector<std::optional<Vec2>> at(verts.size());  // where a dying vertex meets D
+    for (std::size_t i = 0; i < verts.size(); ++i) {
+        const auto q = position(verts[i], t);
+        if (q && gap(*q) <= rho) {
             dying[i] = 1;
             vanchor[i] = nearest(*q);
-        } else if (!q) {
+            at[i] = q;
+        } else if (q) {
+            // A shock between nearly parallel fronts moves fast, so rounding in t* puts it far from
+            // D at t*; it is dying if it passes D within the cluster's time window [RB-02].
+            const auto a = position(verts[i], std::max(vertices_[verts[i]].t0, t - tol_.time));
+            const auto b = position(verts[i], t + tol_.time);
+            if (a && b && !plateau) {
+                double d = std::numeric_limits<double>::infinity();
+                Vec2 meet;
+                for (Vec2 x : points)
+                    if (segment_distance(x, *a, *b) < d) {
+                        d = segment_distance(x, *a, *b);
+                        meet = x;
+                    }
+                if (d <= rho) {
+                    dying[i] = 1;
+                    vanchor[i] = nearest(meet);
+                    at[i] = meet;
+                }
+            }
+        } else {
             // Rounding has taken t* just past the tangency where this shock ends; its position
             // a little earlier is near the tangency point, within sqrt(dt R) [EV-08].
             const auto e = position(verts[i], std::max(vertices_[verts[i]].t0, t - 1e-9));
@@ -260,7 +296,6 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
             }
         }
     }
-
     // 2. Pieces of the surviving elements.
     struct Piece {
         std::uint32_t old;
@@ -271,22 +306,27 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     auto contact = [&](int k, std::uint32_t e) { anchors[k].contacts.push_back(elements_[e].site); };
     auto midpoint = [&](std::uint32_t e) -> std::optional<Vec2> {
         const FrontElement& el = elements_[e];
-        const auto pl = position(el.prev, t), pr = position(el.next, t);
+        auto where = [&](std::uint32_t v) {
+            const auto it = vindex.find(v);
+            return it != vindex.end() && at[it->second] ? at[it->second] : position(v, t);
+        };
+        const auto pl = where(el.prev), pr = where(el.next);
         if (!pl || !pr) return std::nullopt;
         const Site& s = sites[el.site];
         if (s.is_line()) return 0.5 * (*pl + *pr);
         const Vec2 c = s.centre;
         auto angle = [&](Vec2 q) { return s.sigma * std::atan2(q.y - c.y, q.x - c.x); };
         const double al = angle(*pl);
+        const double r = std::max(s.offset_radius(t), 0.0);
         double sweep = wrap_2pi(angle(*pr) - al);
-        if (sweep > two_pi - tol_.ang) sweep = 0.0;
-        return c + std::max(s.offset_radius(t), 0.0) * polar(s.sigma * (al + 0.5 * sweep));
+        if (sweep > two_pi - (tol_.ang + (r > rho ? spread / r : 0.0))) sweep = 0.0;  // ends crossed within D
+        return c + r * polar(s.sigma * (al + 0.5 * sweep));
     };
 
     for (std::size_t i = 0; i < m; ++i) {
         const std::uint32_t e = elems[i];
-        const std::size_t ip = (i + m - 1) % m;
-        const bool lp = dying[ip], ln = dying[i];
+        const std::size_t ip = vindex.at(elements_[e].prev), in = vindex.at(elements_[e].next);
+        const bool lp = dying[ip], ln = dying[in];
         if (e == px || e == py) {
             // A plateau element runs along the plateau from one anchor to the other.
             const int enter = e == px ? 0 : 1, leave = 1 - enter;
@@ -301,20 +341,20 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
             touched[i] = 1;
             const auto mid = midpoint(e);
             if (!mid || gap(*mid) <= rho) {
-                contact(mid ? nearest(*mid) : vanchor[i], e);
+                contact(mid ? nearest(*mid) : vanchor[in], e);
                 continue;
             }
-            pieces.push_back({e, vanchor[ip], vanchor[i]});
+            pieces.push_back({e, vanchor[ip], vanchor[in]});
             contact(vanchor[ip], e);
-            contact(vanchor[i], e);
+            contact(vanchor[in], e);
         } else if (lp) {
             touched[i] = 1;
             pieces.push_back({e, vanchor[ip], -1});
             contact(vanchor[ip], e);
         } else if (ln) {
             touched[i] = 1;
-            pieces.push_back({e, -1, vanchor[i]});
-            contact(vanchor[i], e);
+            pieces.push_back({e, -1, vanchor[in]});
+            contact(vanchor[in], e);
         } else {
             // The front passes through D between its two surviving vertices.
             const Site& s = site(e);
@@ -331,7 +371,7 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
 
     // Dying vertices.
-    for (std::size_t i = 0; i < m; ++i)
+    for (std::size_t i = 0; i < verts.size(); ++i)
         if (dying[i] && vertices_[verts[i]].type == VertexType::shock) ++anchors[vanchor[i]].shocks_in;
 
     // Kill the touched elements and create the pieces; a piece keeps the vertex it has not lost.
@@ -341,6 +381,7 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         int anchor;
         double angle;  // direction away from the anchor along the front
         double k;      // lateral curvature: larger is further counter-clockwise
+        double slack;  // how far the direction can turn as the anchor moves within the cluster radius
         double rel = 0.0;
     };
     std::vector<Port> ports;
@@ -350,12 +391,15 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         const Vec2 f = front_point(s, t, anchors[k].p);
         const Vec2 g = s.gradient(f);
         const Vec2 u = in ? Vec2{-g.y, g.x} : Vec2{g.y, -g.x};
-        double lateral = 0.0;
+        double lateral = 0.0, slack = 0.0;
         if (!s.is_line()) {
             const double r = s.offset_radius(t);
-            if (r > rho) lateral = dot(s.centre - f, perp(u)) / (r * r);
+            if (r > rho) {
+                lateral = dot(s.centre - f, perp(u)) / (r * r);
+                slack = spread / r;
+            }
         }
-        ports.push_back({id, in, k, angle_of(u), lateral, 0.0});
+        ports.push_back({id, in, k, angle_of(u), lateral, slack, 0.0});
     };
     for (std::size_t i = 0; i < m; ++i) {
         if (!touched[i]) continue;
@@ -403,10 +447,13 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         if (a.anchor != b.anchor) return a.anchor > b.anchor;
         return a.rel != b.rel ? a.rel < b.rel : a.element < b.element;
     });
-    // Directions equal within eps_ang (tangent fronts) are ordered by curvature.
+    // Directions equal within eps_ang (tangent fronts) are ordered by curvature. The direction of a
+    // curved front of radius r is only known to within spread / r, since the anchor stands for every
+    // point of the cluster: a tangency a cluster radius from a vertex is still a tangency [RB-03].
     for (std::size_t i = 0; i < ports.size();) {
         std::size_t j = i + 1;
-        while (j < ports.size() && ports[j].anchor == ports[i].anchor && ports[j].rel - ports[j - 1].rel <= tol_.ang)
+        while (j < ports.size() && ports[j].anchor == ports[i].anchor &&
+               ports[j].rel - ports[j - 1].rel <= tol_.ang + ports[j].slack + ports[j - 1].slack)
             ++j;
         std::sort(ports.begin() + static_cast<std::ptrdiff_t>(i), ports.begin() + static_cast<std::ptrdiff_t>(j),
                   [](const Port& a, const Port& b) { return a.k != b.k ? a.k < b.k : a.element < b.element; });
@@ -427,8 +474,11 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
     if (2 * links.size() != np) return failure("unpaired front ports");
     if (np == 0)
-        for (std::size_t i = 0; i < m; ++i)
-            if (!touched[i]) return failure("a vanishing loop with surviving elements");
+        for (std::uint32_t x = start;;) {
+            if (elements_[x].alive) return failure("a vanishing loop with surviving elements");
+            x = next_element(x);
+            if (x == start) break;
+        }
 
     // 4. Emit the MAT vertices, close the dying shocks, add the plateau edge and the new shocks.
     for (Anchor& a : anchors) {
@@ -448,7 +498,7 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         }
         a.mv = add_mat_vertex_at_sites(a.p, t, kind, contacts);
     }
-    for (std::size_t i = 0; i < m; ++i) {
+    for (std::size_t i = 0; i < verts.size(); ++i) {
         if (!dying[i]) continue;
         close_edge(verts[i], anchors[vanchor[i]].mv, anchors[vanchor[i]].p, t);
         vertices_[verts[i]].alive = false;
@@ -472,21 +522,22 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         mat_edges.push_back(d);
     }
 
-    const std::uint32_t first_loop = next_loop_;
     std::vector<std::uint32_t> born;
     for (const auto& [i, j] : links) {
         const Port &in = ports[i], &out = ports[j];
         const Anchor& a = anchors[in.anchor];
+        // Tangent ports ordered by curvature can be measured the other way round.
         double sweep = wrap_2pi(in.angle - out.angle);
-        if (sweep > two_pi - tol_.ang) sweep = 0.0;
+        if (sweep > two_pi - (tol_.ang + in.slack + out.slack)) sweep = 0.0;
         auto v = add_shock(in.element, out.element, a.p, t, a.mv, polar(out.angle + 0.5 * sweep));
         if (!v) return tl::unexpected(v.error());
         elements_[in.element].next = *v;
         elements_[out.element].prev = *v;
         born.push_back(*v);
     }
-    for (std::uint32_t v : born)
-        if (elements_[vertices_[v].left].loop < first_loop) relabel_loop(vertices_[v].left);
+    std::vector<std::uint32_t> starts;
+    for (std::uint32_t v : born) starts.push_back(vertices_[v].left);
+    relabel_loops(starts);
 
     ++stats.clusters;
     if (np == 0) ++stats.annihilations;

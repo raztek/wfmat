@@ -206,7 +206,8 @@ std::string same_mat(const MedialAxis& a, const MedialAxis& b, double tol)
 }
 
 // Runs a family of shapes, with the property checks, the Boost.Polygon comparison for integer
-// polygons, and the [RB-04] cross-check against cluster resolution of every event.
+// polygons, the [RB-04] cross-check against cluster resolution of every event, and the [EV-12]
+// check that the all-pairs broad phase processes the same events.
 struct FamilyRun {
     int failures = 0;
     std::string first;
@@ -236,11 +237,16 @@ struct FamilyRun {
             why = all ? same_mat(*mat, *all, 1e-9 * prep->xf.scale) : to_string(all.error());
             if (!why.empty()) why = "cluster resolution of every event: " + why;
         }
+        if (why.empty()) {
+            options.resolve_all_events = false;
+            options.broad_phase = BroadPhase::all_pairs;
+            auto all = compute_mat(*prep, options);
+            why = all ? identical_mat(*mat, *all) : to_string(all.error());
+            if (!why.empty()) why = "all-pairs broad phase: " + why;
+        }
         if (!why.empty()) fail(name, why, region);
     }
 };
-
-} // namespace
 
 TEST_CASE("Rectangle: four corner edges and a plateau", "[M5][RB-03][OUT-02][VER-02]")
 {
@@ -359,7 +365,47 @@ TEST_CASE("Corridors: plateaus ending at reflex corners", "[M5][RB-03][VER-03][V
     CHECK(family.failures == 0);
 }
 
-TEST_CASE("Degeneracy suite", "[M5][RB-02][RB-03][RB-04][VER-03][VER-06]")
+// A piece cut from a large filleted star, run with the star's tolerances (f is the star's frame
+// over the piece's): both broad phases must give one valid axis. The failure needed a cluster here;
+// another platform's maths library can round the events apart, so at most one forms.
+void check_star_piece(const std::string& name, double f)
+{
+    const Region region = load(name);
+    Options options;
+    options.tol.geom *= f;
+    options.tol.len *= f;
+    options.tol.time *= f;
+    const PreparedRegion prep = prepared(region, options);
+    auto mat = compute_mat(prep, options);
+    REQUIRE(mat);
+    CHECK(mat->stats().clusters <= 1);
+    CHECK(check_mat(prep, *mat, 1e-9, 4).empty());
+    options.broad_phase = BroadPhase::all_pairs;
+    auto all = compute_mat(prep, options);
+    REQUIRE(all);
+    CHECK(identical_mat(*mat, *all).empty());
+}
+
+} // namespace
+
+TEST_CASE("A tangency a cluster radius from a tangent join", "[M5][RB-03][EV-12]")
+{
+    // From a 40,000-segment star: a slit's end arc touches the nearly parallel side of the next
+    // spike 9e-10 from the arc's join with its own side, and the contact and the join's split form
+    // one cluster. The tangent ports' directions are known only to the cluster's spread over the
+    // arc's radius.
+    check_star_piece("near-tangent-slit.json", 2.8452320593455993);
+}
+
+TEST_CASE("A fast shock reaching a cluster within its time window", "[M5][RB-02][RB-03][EV-12]")
+{
+    // From a 100,000-segment star: a triangle of fronts vanishes at one point, but the shock between
+    // its two nearly parallel sides moves so fast that at t* it is 3e-7 short of the point. It must
+    // still die there, or the triangle is rebuilt at the same time for ever.
+    check_star_piece("fast-shock-triangle.json", 2.9487482310792807);
+}
+
+TEST_CASE("Degeneracy suite", "[M5][RB-02][RB-03][RB-04][EV-12][VER-03][VER-06]")
 {
     const int shapes = degenerate_shape_count();
     std::mt19937_64 rng(20261010);
