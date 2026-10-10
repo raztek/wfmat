@@ -37,6 +37,7 @@ path, polyline { fill: none; vector-effect: non-scaling-stroke; stroke-linejoin:
 .line { stroke: #1f2937; stroke-width: 2; }
 .arc { stroke: #2563eb; stroke-width: 2; }
 .curve { stroke: #dc2626; stroke-width: 1.5; }
+.offset { stroke: #0d9488; stroke-width: 1; stroke-dasharray: 4 3; }
 .disk { fill: #f59e0b22; stroke: #f59e0b; stroke-width: 1; vector-effect: non-scaling-stroke; }
 .point { fill: #dc2626; }
 .convex { fill: #16a34a; }
@@ -80,13 +81,52 @@ void SvgWriter::joins(const PreparedRegion& region)
                  "\" cy=\"" + num(region.xf.from_unit(j.p).y) + "\" r=\"" + num(marker_) + "\"/>\n";
 }
 
-void SvgWriter::medial_axis(const MedialAxis& mat, int samples_per_edge)
+void SvgWriter::medial_axis(const MedialAxis& mat)
 {
+    double rmax = 0.0;
+    for (const MatVertex& v : mat.vertices()) rmax = std::max(rmax, v.r);
+    const double tol = 0.25 * std::max(view_.extent().x, view_.extent().y) / options_.width_px;
     std::vector<Vec2> pts;
     for (const MatEdge& e : mat.edges()) {
         pts.clear();
-        for (int k = 0; k <= samples_per_edge; ++k) pts.push_back(e.point_at(double(k) / samples_per_edge));
-        polyline(pts, "curve");
+        e.flatten(tol, pts);
+        if (!options_.colour_by_radius || rmax <= 0.0) {
+            polyline(pts, "curve");
+            continue;
+        }
+        // Blue to red through purple by the radius at the middle of the edge.
+        const double f = std::clamp(e.radius_at(0.5) / rmax, 0.0, 1.0);
+        char colour[16];
+        std::snprintf(colour, sizeof colour, "#%02x%02x%02x", int(37 + f * (220 - 37)), int(99 - f * (99 - 38)),
+                      int(235 - f * (235 - 38)));
+        body_ += "<polyline class=\"curve\" style=\"stroke:" + std::string(colour) + "\" points=\"";
+        for (std::size_t i = 0; i < pts.size(); ++i) {
+            if (i) body_ += ' ';
+            body_ += xy(pts[i]);
+        }
+        body_ += "\"/>\n";
+    }
+}
+
+void SvgWriter::loops(std::span<const Loop> loops, std::string_view css_class)
+{
+    for (const Loop& loop : loops) {
+        const auto& v = loop.vertices;
+        if (v.empty()) continue;
+        std::string d = "M" + xy(v[0].p);
+        for (std::size_t i = 0; i < v.size(); ++i) {
+            const Vec2 a = v[i].p, b = v[(i + 1) % v.size()].p;
+            if (v[i].bulge == 0.0) {
+                d += " L" + xy(b);
+                continue;
+            }
+            const double sweep = 4.0 * std::atan(v[i].bulge);
+            const double r = dist(a, b) / (2.0 * std::abs(std::sin(sweep / 2.0)));
+            const int large = std::abs(sweep) > std::numbers::pi ? 1 : 0;
+            const int ccw = sweep > 0.0 ? 1 : 0;  // drawn in y-up coordinates under scale(1, -1)
+            d += " A" + num(r) + "," + num(r) + " 0 " + std::to_string(large) + " " + std::to_string(ccw) + " " + xy(b);
+        }
+        body_ += "<path class=\"" + std::string(css_class) + "\" d=\"" + d + " Z\"/>\n";
     }
 }
 

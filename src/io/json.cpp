@@ -77,4 +77,115 @@ std::string write_region_json(const RegionDocument& doc)
     return j.dump() + "\n";
 }
 
+namespace {
+
+using ojson = nlohmann::ordered_json;
+
+ojson point(Vec2 p)
+{
+    return ojson::array({p.x, p.y});
+}
+
+const char* kind_name(VertexKind k)
+{
+    switch (k) {
+    case VertexKind::corner: return "corner";
+    case VertexKind::curvature_end: return "curvature_end";
+    case VertexKind::junction: return "junction";
+    case VertexKind::transition: return "transition";
+    case VertexKind::extremum_min: return "extremum_min";
+    case VertexKind::extremum_max: return "extremum_max";
+    }
+    return "";
+}
+
+const char* kind_name(ConicKind k)
+{
+    switch (k) {
+    case ConicKind::line: return "line";
+    case ConicKind::parabola: return "parabola";
+    case ConicKind::ellipse: return "ellipse";
+    case ConicKind::hyperbola: return "hyperbola";
+    case ConicKind::plateau_line: return "plateau_line";
+    case ConicKind::plateau_arc: return "plateau_arc";
+    }
+    return "";
+}
+
+} // namespace
+
+std::string write_mat_json(const MedialAxis& mat, std::span<const OffsetLoops> offsets, const MatJsonOptions& options)
+{
+    ojson sites = ojson::array();
+    for (const MatSite& s : mat.sites()) {
+        ojson j = {{"segment", s.segment}, {"corner", s.corner}};
+        const Site& g = s.geometry;
+        if (g.is_line()) {
+            j["kind"] = "line";
+            j["normal"] = point(g.n);
+            j["offset"] = g.c;
+        } else {
+            j["kind"] = "circle";
+            j["centre"] = point(g.centre);
+            j["radius"] = g.R;
+            j["sigma"] = g.sigma;
+        }
+        sites.push_back(std::move(j));
+    }
+
+    ojson vertices = ojson::array();
+    for (const MatVertex& v : mat.vertices()) {
+        ojson contacts = ojson::array();
+        for (const MatContact& c : v.contacts) contacts.push_back({{"site", c.site}, {"foot", point(c.foot)}});
+        vertices.push_back(
+            {{"p", point(v.p)}, {"r", v.r}, {"kind", kind_name(v.kind)}, {"edges", v.edges}, {"contacts", contacts}});
+    }
+
+    ojson edges = ojson::array();
+    std::vector<Vec2> poly;
+    for (const MatEdge& e : mat.edges()) {
+        ojson bezier = ojson::array();
+        for (const RationalQuadBezier& b : e.bezier())
+            bezier.push_back(
+                {{"p0", point(b.p0)}, {"p1", point(b.p1)}, {"p2", point(b.p2)}, {"w", b.w}, {"u", {b.u0, b.u1}}});
+        ojson j = {{"v0", e.v0()},   {"v1", e.v1()},   {"left", e.left()}, {"right", e.right()},
+                  {"kind", kind_name(e.kind())}, {"r0", e.r0()}, {"r1", e.r1()}, {"bezier", std::move(bezier)}};
+        if (options.chord_tol > 0.0) {
+            poly.clear();
+            e.flatten(options.chord_tol, poly);
+            ojson pts = ojson::array();
+            for (Vec2 p : poly) pts.push_back(point(p));
+            j["polyline"] = std::move(pts);
+        }
+        edges.push_back(std::move(j));
+    }
+
+    ojson offs = ojson::array();
+    for (const OffsetLoops& o : offsets) {
+        ojson loops = ojson::array();
+        for (const Loop& loop : o.loops) {
+            ojson vs = ojson::array();
+            for (const BulgeVertex& v : loop.vertices) vs.push_back({v.p.x, v.p.y, v.bulge});
+            loops.push_back(std::move(vs));
+        }
+        offs.push_back({{"distance", o.distance}, {"loops", std::move(loops)}});
+    }
+
+    const RunStats& st = mat.stats();
+    const ojson stats = {{"collapses", st.collapses},       {"transitions", st.transitions},
+                        {"curvature_ends", st.curvature_ends}, {"splits", st.splits},
+                        {"contacts", st.contacts},         {"annihilations", st.annihilations},
+                        {"clusters", st.clusters},         {"stale_events", st.stale_events},
+                        {"windows", st.windows},           {"max_residual", st.max_residual}};
+
+    ojson doc = ojson::object();
+    if (!options.units.empty()) doc["units"] = options.units;
+    doc["sites"] = std::move(sites);
+    doc["vertices"] = std::move(vertices);
+    doc["edges"] = std::move(edges);
+    if (!offsets.empty()) doc["offsets"] = std::move(offs);
+    doc["stats"] = stats;
+    return doc.dump() + "\n";
+}
+
 } // namespace wfmat::io
