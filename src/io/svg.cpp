@@ -113,11 +113,13 @@ void SvgWriter::loops(std::span<const Loop> loops, std::string_view css_class)
     for (const Loop& loop : loops) {
         const auto& v = loop.vertices;
         if (v.empty()) continue;
-        std::string d = "M" + xy(v[0].p);
+        std::string d = "M";  // appended, not "M" + ...: GCC 12 -Wrestrict false positive
+        d += xy(v[0].p);
         for (std::size_t i = 0; i < v.size(); ++i) {
             const Vec2 a = v[i].p, b = v[(i + 1) % v.size()].p;
             if (v[i].bulge == 0.0) {
-                d += " L" + xy(b);
+                d += " L";
+                d += xy(b);
                 continue;
             }
             const double sweep = 4.0 * std::atan(v[i].bulge);
