@@ -8,7 +8,7 @@ version: "2.0"
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
-| 2.0 | 2026-10-11 | draft for review | holes: a region is any number of disjoint loops nested up to 8 levels, orientation alternating by level (SC-01, IN-02, IN-05 withdrawn, IN-12 to IN-14, ALG-07); loop merges and closed plateaus (EV-09, EV-11, EV-14, RB-03, RB-07); the MAT of each component has one cycle per hole (OUT-08, OUT-11); API and JSON for several loops (API-02, OUT-06); relaxed verification scope (PF-03, VER-02 to VER-05); milestone M4 in three parts |
+| 2.0 | 2026-10-11 | draft for review | holes: a region is any number of disjoint loops nested up to 8 levels, orientation alternating by level as an input rule (SC-01, IN-02, IN-05 withdrawn, IN-12 to IN-14, ALG-07); loop merges and closed plateaus (EV-09, EV-11, EV-14, RB-03, RB-07); the MAT of each component has one cycle per hole (OUT-08, OUT-11); API and JSON for several loops (API-02, OUT-06); relaxed verification scope (PF-03, VER-02 to VER-05); milestone M4 in three parts |
 | 1.5 | 2026-10-10 | minor revision | OUT-05, API-02: Bézier export as a list of arcs, each turning by less than a right angle, and the flattening rule; OUT-06: the MAT JSON layout; ALG-06, API-02: `inward_offset` as implemented in M7; API-03: CLI options; section 13: the PF-02 targets move from M6 to a new milestone, M8 |
 | 1.4 | 2026-10-09 | minor revision | EV-11, EV-12, RB-01: the windowed broad phase as implemented in M6 (window choice, split candidates, event identity in the queue order); PF-01: heap compaction rule; RB-03: tangent ports compared within the cluster's spread, fast shocks die if they pass through $D$ within $\varepsilon_t$; PF-02: times measured in M6; VER-07: benchmark families |
 | 1.3 | 2026-10-09 | minor revision | EV-04: a circle front can also reach a regular vertex; RB-02, RB-03: cluster radius, port ordering and vertex kinds as implemented in M5; RB-04 and API: `resolve_all_events` option for the cross-check |
@@ -85,7 +85,7 @@ A convex arc has its centre on the $\Omega$ side; a concave arc bulges into $\Om
 
 ## 3. Input specification
 
-The input is a region given as one or more closed chains of lines and arcs in bulge form; the loops are validated, their nesting is derived, each is oriented from its nesting depth, and the whole region is normalised before any propagation starts.
+The input is a region given as one or more closed chains of lines and arcs in bulge form; the loops are validated, their nesting is derived, each loop's orientation is checked against its nesting depth, and the whole region is normalised before any propagation starts.
 
 **[IN-01] Representation.** A loop is a cyclic list of vertices $(x, y, \beta)$ with bulge $\beta$. The segment from vertex $i$ to $i+1$ is a line when $\beta = 0$, otherwise a circular arc with $\beta = \tan(\theta/4)$, $\theta$ the signed sweep (the DXF LWPOLYLINE convention). Bulge form guarantees closure and $G^0$ continuity by construction. A single full circle is a loop of two half-arcs ($\beta = \pm 1$ each). An explicit (centre, radius, start angle, sweep) form is also accepted and converted.
 
@@ -96,12 +96,12 @@ The input is a region given as one or more closed chains of lines and arcs in bu
   "units": "mm",
   "loops": [
     [[0,0,0],[100,0,0],[100,40,1],[60,40,0],[0,40,0]],
-    [[20,15,1],[30,15,1]]
+    [[20,15,-1],[30,15,-1]]
   ]
 }
 ```
 
-`loops` lists every loop in any order and with any orientation; the second loop above is a circular hole of diameter 10. The v1 form, `"outer": [...]`, stays valid and means a region of that one loop; it may be followed by `"holes": [[...], ...]`, which are simply further loops. A document must use `loops` or `outer`, not both. Loops are numbered from 0 in document order (`outer` first, then `holes`), and diagnostics name a loop by that number and a segment by its index in the loop.
+`loops` lists every loop in any order; each loop must already have the orientation of its nesting level [IN-08]. The second loop above is a circular hole of diameter 10, given clockwise (negative bulges) because it is at depth 1. The v1 form, `"outer": [...]`, stays valid and means a region of that one loop; it may be followed by `"holes": [[...], ...]`, which are simply further loops. A document must use `loops` or `outer`, not both. Loops are numbered from 0 in document order (`outer` first, then `holes`), and diagnostics name a loop by that number and a segment by its index in the loop.
 
 **Validation rules (reject with a diagnostic naming the loop and segment)**
 
@@ -116,13 +116,13 @@ The input is a region given as one or more closed chains of lines and arcs in bu
 **Normalisation**
 
 1. **[IN-07]** Translate the centre of the bounding box of all loops to the origin and scale by $1/L$, $L$ the half-diagonal, so all coordinates lie in $[-1, 1]$. All tolerances are relative to this unit frame; output is mapped back by the inverse transform, radii by $L$.
-2. **[IN-08]** Orientation alternates with nesting level: loops of even depth (0, 2, 4, 6) run counter-clockwise and loops of odd depth (1, 3, 5, 7) clockwise, so $\Omega$ is on the left of every loop. The orientation of each input loop is measured (signed area via the shoelace formula plus the arc segment areas) and the loop is reversed when it does not match its level; the caller may give the loops in either direction. A reversed loop is reported in the prepared region, as in v1.
+2. **[IN-08]** Orientation alternates with nesting level: loops of even depth (0, 2, 4, 6) run counter-clockwise and loops of odd depth (1, 3, 5, 7) clockwise, so $\Omega$ is on the left of every loop. This is an input rule, checked during validation: the orientation of each input loop is measured (signed area via the shoelace formula plus the arc segment areas), and a loop whose direction does not match its level is rejected, with a diagnostic naming the loop, its depth and the direction expected. Loops are never reversed silently. This changes v1, which reversed a clockwise single loop; a v1 input given clockwise is now rejected.
 3. **[IN-09]** Merge consecutive collinear lines and consecutive co-circular arcs (same centre and radius within $\varepsilon_{\text{geom}}$). This removes spurious transition vertices.
 4. **[IN-10]** Snap near-tangent joins ($\lvert\varphi\rvert \le \varepsilon_{\text{ang}}$) to exact tangency and record them as $G^1$.
 
 IN-09 and IN-10 work on each loop separately, and never across loops.
 
-**[IN-14] Prepared region.** The result of preparation keeps, for every loop, its segments, joins and merge sources as in v1, plus its input index, its depth, its component, and whether it was reversed; and for every component, its outer loop and its holes.
+**[IN-14] Prepared region.** The result of preparation keeps, for every loop, its segments, joins and merge sources as in v1, plus its input index, its depth and its component; and for every component, its outer loop and its holes.
 
 **[IN-11] Tolerances (defaults, unit frame, all configurable)**
 
@@ -473,7 +473,7 @@ Every test cites the requirement identifiers it verifies. Correctness is establi
 - Residual: $\lvert d(p) - r\rvert$ along each edge, with $d$ computed by brute force over all sites.
 - Topology: per component, connected with cycle rank equal to its number of holes [OUT-08], with degrees matching vertex kinds.
 - Reconstruction: the union of inscribed disks matches $\Omega$ within the sampling tolerance.
-- Invariance: translating, rotating, scaling, reversing any loop, and listing the loops in another order give the same axis up to the transform and the component numbering.
+- Invariance: translating, rotating, scaling, and listing the loops in another order give the same axis up to the transform and the component numbering. Reversing any loop must be rejected [IN-08].
 
 **[VER-05] Randomised testing.** Random star-shaped polygons with filleted corners, and random arc chains, at $10^4$ shapes per CI run with fixed seeds. With holes: the same outlines with one to eight random holes (disks, small filleted polygons, scaled copies of the outline) placed by rejection so they stay disjoint, at $10^3$ shapes per CI run and at most about 5,000 segments each [PF-03]. Any failure is minimised automatically and stored as a regression fixture.
 
@@ -490,7 +490,7 @@ Implementation proceeds in seven increments up to the v1.0 release, one more for
 3. **M2 Polygons.** Lines and reflex point sites, events E1a, E1b, E2, E3, all-pairs broad phase. Exit: matches the Boost.Polygon oracle on $10^4$ random polygons.
 4. **M3 Arcs.** Convex and concave arcs, tangent joins, E1c. Exit: canonical arc shapes and the sampling oracle.
 5. **M4 Holes (v2).** Multiple loops and loop merges, delivered in three parts after the v1 release, one pull request each:
-    - **M4.1 Input.** `Region` with several loops, JSON `loops` (and `outer` with `holes`), IN-12 disjointness, IN-13 nesting and components, IN-08 orientation by depth, prepared region per IN-14, SVG of all loops; `compute_mat` still answers `unsupported` for a region with holes, naming M4.2. Exit: valid and invalid multi-loop inputs load, validate and render.
+    - **M4.1 Input.** `Region` with several loops, JSON `loops` (and `outer` with `holes`), IN-12 disjointness, IN-13 nesting and components, IN-08 orientation check by depth, prepared region per IN-14, SVG of all loops; `compute_mat` still answers `unsupported` for a region with holes, naming M4.2. Exit: valid and invalid multi-loop inputs load, validate and render.
     - **M4.2 Engine.** Per-component runs (ALG-07), events across loops with merges (EV-09, EV-11, EV-14), clusters on several loops and closed plateaus (RB-03, RB-07), components in the output (OUT-01 to OUT-03, OUT-11) and the cycle-rank check (OUT-08). Exit: the VER-02 hole shapes and the degeneracy suite with holes, through both the simple handlers and `resolve_all_events`, and identical event sequences to all-pairs mode.
     - **M4.3 Release 2.0.** Oracle comparison and randomised tests with holes (VER-03, VER-05), offsets and JSON grouped by component, CLI, `docs/api.md`, and a pinned vcpkg baseline (`vcpkg-configuration.json`) so Visual Studio 2026's bundled vcpkg builds the repository. Exit: v2.0.0 tag.
 6. **M5 Degeneracies.** Cluster resolution and plateau edges. Exit: degeneracy suite passes; simple handlers agree with cluster resolution.
@@ -508,7 +508,7 @@ The six scope decisions of v1 were confirmed on 8 October 2026 and the v2 decisi
 | --- | --- |
 | Licensing | permissive licences (BSL-1.0, MIT, Apache-2.0) are acceptable; strict public domain is not required |
 | Holes | deferred to v2; v1 accepts a single loop |
-| Holes in v2 (11 October 2026) | loops nested up to 8 levels (depths 0 to 7), orientation reversed on odd levels (counter-clockwise on even, clockwise on odd); material between each outer loop and the loops directly inside it; one axis component per outer loop; loops pairwise disjoint; orientation derived from nesting; interior MAT only; the 8-level limit and odd-level reversal set by michael |
+| Holes in v2 (11 October 2026) | loops nested up to 8 levels (depths 0 to 7), orientation an input rule: counter-clockwise on even levels, clockwise on odd levels, a mismatch rejected; material between each outer loop and the loops directly inside it; one axis component per outer loop; loops pairwise disjoint; interior MAT only; the 8-level limit and the orientation rule set by michael |
 | Verification scope in v2 (11 October 2026) | correctness up to about 5,000 segments; slow but correct is acceptable; no new performance targets |
 | Exterior MAT | out of scope |
 | Language level | C++20 baseline |
@@ -552,7 +552,7 @@ Cited from memory, not re-checked online for this draft.
 | IN-05 | 3 | Withdrawn in 2.0 (was: exactly one loop) |
 | IN-06 | 3 | Cusp corners rejected |
 | IN-07 | 3 | Normalisation to the unit frame |
-| IN-08 | 3 | Orientation by nesting depth |
+| IN-08 | 3 | Orientation must match nesting depth |
 | IN-09 | 3 | Merge collinear and co-circular neighbours |
 | IN-10 | 3 | Snap near-tangent joins to G1 |
 | IN-11 | 3 | Configurable tolerances with defaults |
