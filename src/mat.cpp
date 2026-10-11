@@ -163,8 +163,21 @@ Result<MedialAxis> compute_mat(const Region& region, const Options& options)
     return compute_mat(*prepared, options);
 }
 
+namespace {
+
+// [API-03] Regions of more than one loop need the engine of milestone M4.2.
+Result<void> single_loop(const PreparedRegion& region)
+{
+    if (region.loops.size() <= 1) return {};
+    return make_error(ErrorCode::unsupported, "M4.2",
+                      "regions of more than one loop (holes, islands) are not computed yet; they arrive in M4.2");
+}
+
+} // namespace
+
 Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& options)
 {
+    if (auto one = single_loop(region); !one) return tl::unexpected(one.error());
     detail::Engine engine(region, options);
     if (auto r = engine.run(); !r) return tl::unexpected(r.error());
     const Transform& xf = region.xf;
@@ -248,6 +261,7 @@ Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double dis
 {
     if (!(distance >= 0.0) || !std::isfinite(distance))
         return make_error(ErrorCode::invalid_input, "ALG-06", "the offset distance must be finite and not negative");
+    if (auto one = single_loop(region); !one) return tl::unexpected(one.error());
     const double t = region.xf.length_to_unit(distance);
     detail::Engine engine(region, options);
     if (auto r = engine.run(t); !r) return tl::unexpected(r.error());

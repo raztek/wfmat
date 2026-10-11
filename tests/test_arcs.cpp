@@ -52,8 +52,8 @@ TEST_CASE("Disk: one vertex at the centre", "[M3][EV-08][VER-02]")
 
 TEST_CASE("Half disk: two corner edges meeting at a maximum", "[M3][EV-08][VER-02]")
 {
-    Region region;
-    region.outer.vertices = {{{-10, 0}, 0.0}, {{10, 0}, 1.0}};
+    Region region{{Loop{}}};
+    region.loops[0].vertices = {{{-10, 0}, 0.0}, {{10, 0}, 1.0}};
     const MedialAxis mat = mat_of(region);
     CHECK(mat.vertices().size() == 3);
     CHECK(count(mat, VertexKind::extremum_max) == 1);
@@ -67,8 +67,8 @@ TEST_CASE("Half disk: two corner edges meeting at a maximum", "[M3][EV-08][VER-0
 
 TEST_CASE("Lens: two convex arcs", "[M3][EV-08][VER-04]")
 {
-    Region region;
-    region.outer.vertices = {{{0, 0}, 0.3}, {{10, 1}, 0.45}};
+    Region region{{Loop{}}};
+    region.loops[0].vertices = {{{0, 0}, 0.3}, {{10, 1}, 0.45}};
     const MedialAxis mat = mat_of(region);
     CHECK(mat.vertices().size() == 3);
     CHECK(count(mat, VertexKind::extremum_max) == 1);
@@ -89,8 +89,8 @@ TEST_CASE("Ice-cream cone: the corner edge ends at the arc centre", "[M3][EV-03]
     const double R = 5.0, h = 20.0;
     const double s = R / h, c = std::sqrt(1.0 - s * s);  // sine and cosine of the half-angle
     const Vec2 t1{R * c, -R * s}, t2{-R * c, -R * s};
-    Region region;
-    region.outer.vertices = {{{0, -h}, 0.0}, {t1, bulge_from_sweep(std::numbers::pi + 2.0 * std::asin(s))}, {t2, 0.0}};
+    Region region{{Loop{}}};
+    region.loops[0].vertices = {{{0, -h}, 0.0}, {t1, bulge_from_sweep(std::numbers::pi + 2.0 * std::asin(s))}, {t2, 0.0}};
     const MedialAxis mat = mat_of(region);
     REQUIRE(mat.vertices().size() == 2);
     CHECK(count(mat, VertexKind::curvature_end) == 1);
@@ -180,8 +180,8 @@ TEST_CASE("The sampled Voronoi oracle converges to the axis", "[M3][VER-03]")
     shapes.emplace_back("filleted quadrilateral", filleted({{0, 0}, {10, 0}, {9, 4}, {1, 5}}, {0.3, 0.5, 0.2, 0.4}));
     shapes.emplace_back("filleted reflex corner",
                         filleted({{0, 0}, {61, 2}, {58, 21}, {22, 19}, {19, 63}, {1, 60}}, {0.5, 0.0, 0.3, 0.6, 0.0, 0.4}));
-    Region lens;
-    lens.outer.vertices = {{{0, 0}, 0.3}, {{10, 1}, 0.45}};
+    Region lens{{Loop{}}};
+    lens.loops[0].vertices = {{{0, 0}, 0.3}, {{10, 1}, 0.45}};
     shapes.emplace_back("lens", lens);
     std::mt19937_64 rng(3);
     for (int k = 0; k < 6; ++k) {

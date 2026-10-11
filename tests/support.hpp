@@ -39,8 +39,8 @@ inline PreparedRegion prepared(const Region& region, const Options& options = {}
 
 inline Region polygon(std::initializer_list<Vec2> points)
 {
-    Region region;
-    for (Vec2 p : points) region.outer.vertices.push_back({p, 0.0});
+    Region region{{Loop{}}};
+    for (Vec2 p : points) region.loops[0].vertices.push_back({p, 0.0});
     return region;
 }
 

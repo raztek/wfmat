@@ -17,7 +17,7 @@ struct Error {
     ErrorCode code = ErrorCode::invalid_input;
     std::string requirement;               // the spec requirement that failed, e.g. "IN-04"
     std::string message;
-    std::optional<std::size_t> loop;       // 0 is the outer loop
+    std::optional<std::size_t> loop;       // input loop index
     std::optional<std::size_t> segment;    // input segment index (segment i runs from vertex i to i + 1)
     std::string dump_path;                 // diagnostic dump, when one was written
 };

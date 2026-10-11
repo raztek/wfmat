@@ -33,7 +33,7 @@ BoundaryDistance boundary_distance(std::span<const Segment> segments, Vec2 p, do
 // Winding number of the closed chain of segments about p (p not on the boundary).
 int winding_number(std::span<const Segment> segments, Vec2 p);
 
-// p strictly inside the (counter-clockwise) region; points within tol of the boundary are outside.
+// p strictly inside the region (inside an outer loop, outside its holes); points within tol of the boundary are outside.
 bool contains(const PreparedRegion& region, Vec2 p, double tol);
 
 // [OUT-07] check of a candidate inscribed disk (p, r) in the unit frame.

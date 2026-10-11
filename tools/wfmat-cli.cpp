@@ -96,11 +96,15 @@ int main(int argc, char** argv)
         reflex += j.kind == wfmat::JoinKind::reflex;
     }
     const double scale = region->xf.scale;
-    std::printf("%s: valid; %zu segments (%zu lines, %zu arcs) after merging %zu input segments\n", input.c_str(),
-                region->segments.size(), region->segments.size() - arcs, arcs, doc->region.outer.vertices.size());
-    std::printf("joins: %zu convex, %zu tangent, %zu reflex; area %.10g%s%s%s; input orientation %s\n", convex, tangent,
-                reflex, region->area * scale * scale, doc->units.empty() ? "" : " ", doc->units.c_str(), doc->units.empty() ? "" : "^2",
-                region->reversed ? "clockwise (reversed)" : "counter-clockwise");
+    std::size_t input_segments = 0;
+    for (const auto& loop : doc->region.loops) input_segments += loop.vertices.size();
+    const std::size_t nloops = region->loops.size(), ncomp = region->components.size();
+    std::printf("%s: valid; %zu loop%s in %zu component%s; %zu segments (%zu lines, %zu arcs) after merging %zu input "
+                "segments\n",
+                input.c_str(), nloops, nloops == 1 ? "" : "s", ncomp, ncomp == 1 ? "" : "s", region->segments.size(),
+                region->segments.size() - arcs, arcs, input_segments);
+    std::printf("joins: %zu convex, %zu tangent, %zu reflex; area %.10g%s%s%s\n", convex, tangent, reflex,
+                region->area * scale * scale, doc->units.empty() ? "" : " ", doc->units.c_str(), doc->units.empty() ? "" : "^2");
 
     auto mat = wfmat::compute_mat(*region);
     if (mat) {

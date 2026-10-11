@@ -1,6 +1,6 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 2.0 (draft for review) · 11 October 2026 · michael"
+subtitle: "Version 2.0 · 11 October 2026 · michael"
 version: "2.0"
 ---
 
@@ -8,7 +8,7 @@ version: "2.0"
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
-| 2.0 | 2026-10-11 | draft for review | holes: a region is any number of disjoint loops nested up to 8 levels, orientation alternating by level as an input rule (SC-01, IN-02, IN-05 withdrawn, IN-12 to IN-14, ALG-07); loop merges and closed plateaus (EV-09, EV-11, EV-14, RB-03, RB-07); the MAT of each component has one cycle per hole (OUT-08, OUT-11); API and JSON for several loops (API-02, OUT-06); relaxed verification scope (PF-03, VER-02 to VER-05); milestone M4 in three parts |
+| 2.0 | 2026-10-11 | approved baseline (v2) | approved by michael on 11 October 2026; holes: a region is any number of disjoint loops nested up to 8 levels, orientation alternating by level as an input rule (SC-01, IN-02, IN-05 withdrawn, IN-12 to IN-14, ALG-07); loop merges and closed plateaus (EV-09, EV-11, EV-14, RB-03, RB-07); the MAT of each component has one cycle per hole (OUT-08, OUT-11); API and JSON for several loops (API-02, OUT-06); relaxed verification scope (PF-03, VER-02 to VER-05); milestone M4 in three parts |
 | 1.5 | 2026-10-10 | minor revision | OUT-05, API-02: Bézier export as a list of arcs, each turning by less than a right angle, and the flattening rule; OUT-06: the MAT JSON layout; ALG-06, API-02: `inward_offset` as implemented in M7; API-03: CLI options; section 13: the PF-02 targets move from M6 to a new milestone, M8 |
 | 1.4 | 2026-10-09 | minor revision | EV-11, EV-12, RB-01: the windowed broad phase as implemented in M6 (window choice, split candidates, event identity in the queue order); PF-01: heap compaction rule; RB-03: tangent ports compared within the cluster's spread, fast shocks die if they pass through $D$ within $\varepsilon_t$; PF-02: times measured in M6; VER-07: benchmark families |
 | 1.3 | 2026-10-09 | minor revision | EV-04: a circle front can also reach a regular vertex; RB-02, RB-03: cluster radius, port ordering and vertex kinds as implemented in M5; RB-04 and API: `resolve_all_events` option for the cross-check |

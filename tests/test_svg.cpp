@@ -41,8 +41,8 @@ TEST_CASE("clockwise and large arcs set the SVG flags", "[OUT-06]")
     CHECK(concave.find(" 0 0 0 0,40\"") != std::string::npos);
 
     const double b = bulge_from_sweep(1.5 * std::numbers::pi);
-    Region r;
-    r.outer.vertices = {{{0, -1}, b}, {{-1, 0}, 0.0}};  // three quarters of the unit circle plus a chord
+    Region r{{Loop{}}};
+    r.loops[0].vertices = {{{0, -1}, b}, {{-1, 0}, 0.0}};  // three quarters of the unit circle plus a chord
     const std::string large = io::render_svg(prepared(r));
     CHECK(large.find(" 0 1 1 ") != std::string::npos);
 }

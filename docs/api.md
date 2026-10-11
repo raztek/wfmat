@@ -42,14 +42,22 @@ A complete program is in [`examples/basic.cpp`](../examples/basic.cpp), built as
 ```cpp
 struct BulgeVertex { Vec2 p; double bulge = 0.0; };
 struct Loop        { std::vector<BulgeVertex> vertices; };
-struct Region      { Loop outer; };                  // holes arrive in v2
+struct Region      { std::vector<Loop> loops; };     // Region{{loop}}: one loop
 ```
 
 Vertex `i` starts segment `i`, which ends at vertex `i + 1` (the last segment closes the loop). The
 segment is a line when `bulge == 0`, otherwise a circular arc with `bulge = tan(sweep / 4)`: 1 is a
-counter-clockwise half circle, -1 a clockwise one [IN-01]. A full circle is two half arcs. The loop
-may run either way round; it must be simple, with no segment shorter than `tol.len` and no cusp
-corners [IN-03..IN-06].
+counter-clockwise half circle, -1 a clockwise one [IN-01]. A full circle is two half arcs. Each loop
+must be simple, with no segment shorter than `tol.len` and no cusp corners [IN-03..IN-06].
+
+A region may have several loops, in any order, which must neither cross nor touch [IN-12]. A loop's
+depth is the number of loops around it, at most 7 (8 levels) [IN-13]. Its direction is part of the
+input: loops at even depth run counter-clockwise and loops at odd depth clockwise, so the material
+is always on the left; a loop running the other way is rejected, never reversed [IN-08]. Each loop
+at even depth, with the loops directly inside it as its holes, is one component of the region; a
+loop inside a hole is an island, the outer loop of another component. Since 2.0 (M4.1) such regions
+load and validate; `compute_mat` and `inward_offset` answer `unsupported` for more than one loop
+until milestone M4.2.
 
 `loop_from_segments` builds a loop from explicit `LineSpec{a, b}` and
 `ArcSpec{centre, radius, start_angle, sweep}` pieces, checking that consecutive pieces meet to
@@ -180,10 +188,10 @@ std::string to_string(const Error&);           // "IN-04: loop 0, segment 3: ...
 ```
 
 `invalid_input` means the region breaks the input contract (not simple, a segment too short, a
-cusp, holes). `numerical_failure` and `invariant_violation` mean the run could not be completed
+cusp, crossing loops, a loop running the wrong way). `numerical_failure` and `invariant_violation` mean the run could not be completed
 consistently; they are bugs or inputs at the edge of double precision, and worth reporting with the
-input. `unsupported` is reserved for valid input that a later version handles; no input gets it
-in 1.0.
+input. `unsupported` is reserved for valid input that a later version handles: in M4.1, any
+region of more than one loop, with the milestone that handles it (M4.2) in `requirement`.
 
 ## Options and tolerances
 
@@ -208,8 +216,12 @@ are for testing: `all_pairs` must give the same axis as the default, bit for bit
 Input is the bulge JSON of [IN-02]:
 
 ```json
-{ "units": "mm", "outer": [[0, 0], [100, 0, 1], [100, 40], [0, 40]] }
+{ "units": "mm", "loops": [[[0, 0], [100, 0, 1], [100, 40], [0, 40]],
+                           [[20, 15, -1], [30, 15, -1]]] }
 ```
+
+The v1 form, `"outer": [...]` with optional `"holes": [[...], ...]`, is still read; its loops are
+numbered `outer` first. `io::write_region_json` always writes `"loops"`.
 
 `io::read_region_json(path)` and `io::parse_region_json(text)` read it; `io::write_region_json`
 writes it back bit for bit.

@@ -1,9 +1,10 @@
-// JSON input in the v1 bulge schema [IN-02].
+// JSON input in the v2 bulge schema [IN-02].
 //
-//   { "units": "mm", "outer": [[x, y, bulge], [x, y], ...] }
+//   { "units": "mm", "loops": [[[x, y, bulge], [x, y], ...], ...] }
 //
-// A vertex without a bulge starts a line. "units" is optional and informational. Any other
-// key is rejected, and so is "holes" with a pointer to v2 [IN-05].
+// or the v1 form { "outer": [...], "holes": [[...], ...] }, where "holes" is optional and its
+// loops simply follow "outer" in the loop numbering. A vertex without a bulge starts a line.
+// "units" is optional and informational. Any other key is rejected.
 #pragma once
 
 #include <filesystem>
@@ -27,7 +28,7 @@ struct RegionDocument {
 Result<RegionDocument> parse_region_json(std::string_view text);
 Result<RegionDocument> read_region_json(const std::filesystem::path& path);
 
-// Writes the v1 schema; the output parses back to the same region bit for bit.
+// Writes the v2 schema ("loops"); the output parses back to the same region bit for bit.
 std::string write_region_json(const RegionDocument& doc);
 
 // [OUT-06] The medial axis as JSON, in caller units:

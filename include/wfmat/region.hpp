@@ -21,8 +21,11 @@ struct Loop {
     std::vector<BulgeVertex> vertices;
 };
 
+// [SC-01], [IN-13] Any number of disjoint loops, in any order. A loop's nesting depth is the
+// number of loops containing it, at most 7; loops of even depth run counter-clockwise and loops
+// of odd depth clockwise [IN-08]. Region{{loop}} is a region of one loop.
 struct Region {
-    Loop outer;  // holes: v2
+    std::vector<Loop> loops;
 };
 
 // Explicit segment forms, converted to bulge form by loop_from_segments [IN-01].

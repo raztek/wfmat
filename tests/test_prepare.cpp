@@ -43,7 +43,7 @@ TEST_CASE("segments shorter than eps_len are rejected", "[IN-03]")
 TEST_CASE("arcs with a sweep below eps_ang are rejected", "[IN-03]")
 {
     Region r = polygon({{0, 0}, {10, 0}, {10, 10}, {0, 10}});
-    r.outer.vertices[1].bulge = 1e-12;
+    r.loops[0].vertices[1].bulge = 1e-12;
     const Error e = rejected(r);
     CHECK(e.requirement == "IN-03");
     CHECK(e.segment == 1u);
@@ -52,7 +52,7 @@ TEST_CASE("arcs with a sweep below eps_ang are rejected", "[IN-03]")
 TEST_CASE("non-finite input is rejected", "[IN-01]")
 {
     Region r = polygon({{0, 0}, {10, 0}, {10, 10}});
-    r.outer.vertices[2].p.y = std::nan("");
+    r.loops[0].vertices[2].p.y = std::nan("");
     CHECK(rejected(r).requirement == "IN-01");
 }
 
@@ -76,7 +76,7 @@ TEST_CASE("loops that are not simple are rejected", "[IN-04]")
     SECTION("arc crossing a line")
     {
         Region r = polygon({{0, 0}, {10, 0}, {10, 2}, {0, 2}});
-        r.outer.vertices[2].bulge = -0.6;  // the top edge sags to y = -1, through the bottom edge
+        r.loops[0].vertices[2].bulge = -0.6;  // the top edge sags to y = -1, through the bottom edge
         const Error e = rejected(r);
         CHECK(e.requirement == "IN-04");
         CHECK(e.segment == 0u);
@@ -106,7 +106,7 @@ TEST_CASE("cusps are rejected", "[IN-06]")
     {
         // The line arrives at (10, 0) heading +x; the clockwise arc leaves it heading -x.
         Region r = polygon({{0, 0}, {10, 0}, {10, -4}, {0, -4}});
-        r.outer.vertices[1].bulge = 1.0;
+        r.loops[0].vertices[1].bulge = 1.0;
         const Error e = rejected(r);
         CHECK(e.requirement == "IN-06");
         CHECK(e.segment == 1u);
@@ -130,35 +130,30 @@ TEST_CASE("normalisation maps the bounding box to the unit frame", "[IN-07]")
     CHECK(r.area * r.xf.scale * r.xf.scale == Approx(4000.0 + 200.0 * pi));
 }
 
-TEST_CASE("clockwise loops are reversed", "[IN-08]")
+TEST_CASE("a loop running against its nesting level is rejected", "[IN-08]")
 {
     const PreparedRegion ccw = prepared(polygon({{0, 0}, {4, 0}, {4, 2}, {0, 2}}));
-    const PreparedRegion cw = prepared(polygon({{0, 0}, {0, 2}, {4, 2}, {4, 0}}));
-    CHECK_FALSE(ccw.reversed);
-    CHECK(cw.reversed);
-    CHECK(cw.area == Approx(ccw.area));
-    CHECK(cw.area > 0.0);
-    REQUIRE(cw.sources.size() == 4);
-    // Input segment 3 runs (4, 0) -> (0, 0); reversed it is the first counter-clockwise segment.
-    CHECK(cw.sources[0] == std::vector<std::uint32_t>{3});
-    CHECK(cw.xf.from_unit(cw.segments[0].a).x == Approx(0.0));
-    CHECK(cw.xf.from_unit(cw.segments[0].b).x == Approx(4.0));
-    CHECK(count(cw, JoinKind::convex) == 4);
+    CHECK(ccw.area > 0.0);
+    CHECK(count(ccw, JoinKind::convex) == 4);
 
-    SECTION("arc bulges flip with the direction")
+    auto cw = prepare(polygon({{0, 0}, {0, 2}, {4, 2}, {4, 0}}));
+    REQUIRE_FALSE(cw);
+    CHECK(cw.error().requirement == "IN-08");
+    CHECK(cw.error().loop == 0u);
+    CHECK(cw.error().message.find("counter-clockwise") != std::string::npos);
+
+    SECTION("arcs count in the orientation")
     {
         Region r = load("slot.json");
-        std::reverse(r.outer.vertices.begin(), r.outer.vertices.end());
+        CHECK(prepare(r).has_value());
         // Reversing the vertex order moves each bulge to the previous vertex, negated.
-        Region cw_slot;
-        const auto& v = r.outer.vertices;
-        for (std::size_t i = 0; i < v.size(); ++i) cw_slot.outer.vertices.push_back({v[i].p, -v[(i + 1) % v.size()].bulge});
-        const PreparedRegion p = prepared(cw_slot);
-        CHECK(p.reversed);
-        CHECK(p.area * p.xf.scale * p.xf.scale == Approx(1200.0 + 100.0 * pi));
-        CHECK(count(p, JoinKind::tangent) == 4);
-        for (const Segment& s : p.segments)
-            if (s.is_arc()) CHECK(s.sweep > 0.0);
+        Region cw_slot{{Loop{}}};
+        const auto& v = r.loops[0].vertices;
+        for (std::size_t i = 0; i < v.size(); ++i)
+            cw_slot.loops[0].vertices.push_back({v[(v.size() - i) % v.size()].p, -v[(2 * v.size() - i - 1) % v.size()].bulge});
+        auto p = prepare(cw_slot);
+        REQUIRE_FALSE(p);
+        CHECK(p.error().requirement == "IN-08");
     }
 }
 
@@ -181,8 +176,8 @@ TEST_CASE("collinear lines and co-circular arcs are merged", "[IN-09]")
         // A disk given as four quarter arcs merges into two arcs of 3 pi / 2 and pi / 2: one arc
         // cannot hold a full turn.
         const double b = bulge_from_sweep(pi / 2);
-        Region disk;
-        disk.outer.vertices = {{{1, 0}, b}, {{0, 1}, b}, {{-1, 0}, b}, {{0, -1}, b}};
+        Region disk{{Loop{}}};
+        disk.loops[0].vertices = {{{1, 0}, b}, {{0, 1}, b}, {{-1, 0}, b}, {{0, -1}, b}};
         const PreparedRegion r = prepared(disk);
         REQUIRE(r.segments.size() == 2);
         CHECK(std::abs(r.segments[0].sweep) + std::abs(r.segments[1].sweep) == Approx(2 * pi));
@@ -203,8 +198,8 @@ TEST_CASE("near-tangent joins snap to G1", "[IN-10]")
 {
     // A line meeting a half circle with a tangent error of 1e-10 rad (below eps_ang = 1e-9).
     const double tilt = 1e-10;
-    Region r;
-    r.outer.vertices = {{{0, 0}, 0.0}, {{10, 0}, std::tan((pi + tilt) / 4)}, {{10, 4}, 0.0}, {{0, 4}, 0.0}};
+    Region r{{Loop{}}};
+    r.loops[0].vertices = {{{0, 0}, 0.0}, {{10, 0}, std::tan((pi + tilt) / 4)}, {{10, 4}, 0.0}, {{0, 4}, 0.0}};
     const PreparedRegion p = prepared(r);
     REQUIRE(p.joins[0].kind == JoinKind::tangent);
     CHECK(p.joins[0].turn == 0.0);

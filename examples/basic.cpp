@@ -11,8 +11,8 @@ int main()
 
     // 100 x 40 with a half-disk on the right end: vertex i starts segment i; bulge = tan(sweep / 4),
     // so 1 is a counter-clockwise half circle.
-    Region plate;
-    plate.outer.vertices = {{{0, 0}, 0.0}, {{100, 0}, 1.0}, {{100, 40}, 0.0}, {{0, 40}, 0.0}};
+    Region plate{{Loop{}}};
+    plate.loops[0].vertices = {{{0, 0}, 0.0}, {{100, 0}, 1.0}, {{100, 40}, 0.0}, {{0, 40}, 0.0}};
 
     auto mat = compute_mat(plate);
     if (!mat) {

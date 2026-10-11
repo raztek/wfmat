@@ -120,7 +120,7 @@ TEST_CASE("Split: a shock reaching a far element", "[M2][EV-04]")
     CHECK(check_mat(prepared(region), mat).empty());
 }
 
-TEST_CASE("Output is deterministic and independent of orientation and placement", "[M2][OUT-10][VER-04]")
+TEST_CASE("Output is deterministic and independent of the start vertex and placement", "[M2][OUT-10][VER-04]")
 {
     std::mt19937_64 rng(7);
     for (int k = 0; k < 20; ++k) {
@@ -133,10 +133,13 @@ TEST_CASE("Output is deterministic and independent of orientation and placement"
             CHECK(m1.vertices()[i].r == m2.vertices()[i].r);
         }
 
-        // Reversed, rotated by 90 degrees and shifted: the same vertex set up to the transform.
-        Region moved;
-        for (auto it = poly.rbegin(); it != poly.rend(); ++it)
-            moved.outer.vertices.push_back({{-double(it->second) + 12345.0, double(it->first) - 678.0}, 0.0});
+        // Started at another vertex (orientation is an input rule [IN-08]), rotated by 90 degrees and
+        // shifted: the same vertex set up to the transform.
+        Region moved{{Loop{}}};
+        for (std::size_t i = 0; i < poly.size(); ++i) {
+            const auto& q = poly[(i + 2) % poly.size()];
+            moved.loops[0].vertices.push_back({{-double(q.second) + 12345.0, double(q.first) - 678.0}, 0.0});
+        }
         const MedialAxis m3 = mat_of(moved);
         REQUIRE(m3.vertices().size() == m1.vertices().size());
         for (const MatVertex& v : m1.vertices()) {
