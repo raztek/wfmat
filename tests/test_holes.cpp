@@ -1,6 +1,9 @@
 // M4.2: the axis of regions with holes and islands [ALG-07], [EV-09], [RB-07], [OUT-08], [OUT-11].
 #include <algorithm>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
+#include <fstream>
 #include <numbers>
 #include <random>
 #include <string>
@@ -223,8 +226,50 @@ TEST_CASE("the inward offset of a region with holes", "[ALG-06]")
     const Region ring = load("square-ring.json");
     auto two = inward_offset(ring, 5.0);
     REQUIRE(two);
-    CHECK(two->size() == 2);
+    REQUIRE(two->size() == 1);
+    CHECK((*two)[0].size() == 2);
     auto none = inward_offset(ring, 20.0);
     REQUIRE(none);
-    CHECK(none->empty());
+    REQUIRE(none->size() == 1);
+    CHECK((*none)[0].empty());
+}
+
+TEST_CASE("random regions with holes pass the property checks and the oracle", "[VER-05][VER-03][OUT-08]")
+{
+    // Polygons with polygonal holes, then filleted polygons with circular and filleted holes. Each
+    // passes check_mat; every tenth also matches the sampled Voronoi oracle and the all-pairs run.
+    std::mt19937_64 rng(20261012);
+    const int shapes = 400;
+    int failures = 0;
+    std::size_t holes = 0;
+    std::string first;
+    for (int k = 0; k < shapes; ++k) {
+        const Region region = random_holed(rng, k >= shapes / 2);
+        holes += region.loops.size() - 1;
+        auto prep = prepare(region);
+        REQUIRE(prep);
+        Options options;
+        options.debug_checks = k % 16 == 0;
+        auto mat = compute_mat(*prep, options);
+        std::string why = mat ? check_mat(*prep, *mat, 1e-9, 4) : to_string(mat.error());
+        if (why.empty() && k % 10 == 0) {
+            const SampledComparison c = compare_with_sampled_voronoi(*prep, *mat, 128);
+            if (std::max(c.ours_to_voronoi, c.voronoi_to_ours) > 3e-3 * prep->xf.scale)
+                why = "sampled Voronoi oracle off by " +
+                      sci(std::max(c.ours_to_voronoi, c.voronoi_to_ours) / prep->xf.scale) + " L";
+            Options all_pairs;
+            all_pairs.broad_phase = BroadPhase::all_pairs;
+            auto ap = compute_mat(*prep, all_pairs);
+            if (why.empty()) why = ap ? identical_mat(*mat, *ap) : "all pairs: " + to_string(ap.error());
+        }
+        if (!why.empty() && failures++ == 0) first = "shape " + std::to_string(k) + ": " + why;
+        if (!why.empty() && std::getenv("WFMAT_DUMP")) {
+            std::fprintf(stderr, "%d: %s\n", k, why.c_str());
+            std::ofstream(output_path("holes-failure-" + std::to_string(k) + ".json"))
+                << io::write_region_json({region, ""});
+        }
+    }
+    INFO(first);
+    CHECK(failures == 0);
+    CHECK(holes > shapes * 3 / 2);  // most shapes have several holes
 }

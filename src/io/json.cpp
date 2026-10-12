@@ -146,7 +146,7 @@ std::string write_mat_json(const MedialAxis& mat, std::span<const OffsetLoops> o
 {
     ojson sites = ojson::array();
     for (const MatSite& s : mat.sites()) {
-        ojson j = {{"segment", s.segment}, {"corner", s.corner}};
+        ojson j = {{"loop", s.loop}, {"segment", s.segment}, {"corner", s.corner}};
         const Site& g = s.geometry;
         if (g.is_line()) {
             j["kind"] = "line";
@@ -166,7 +166,8 @@ std::string write_mat_json(const MedialAxis& mat, std::span<const OffsetLoops> o
         ojson contacts = ojson::array();
         for (const MatContact& c : v.contacts) contacts.push_back({{"site", c.site}, {"foot", point(c.foot)}});
         vertices.push_back(
-            {{"p", point(v.p)}, {"r", v.r}, {"kind", kind_name(v.kind)}, {"edges", v.edges}, {"contacts", contacts}});
+            {{"p", point(v.p)}, {"r", v.r}, {"kind", kind_name(v.kind)}, {"component", v.component}, {"edges", v.edges},
+             {"contacts", contacts}});
     }
 
     ojson edges = ojson::array();
@@ -176,7 +177,7 @@ std::string write_mat_json(const MedialAxis& mat, std::span<const OffsetLoops> o
         for (const RationalQuadBezier& b : e.bezier())
             bezier.push_back(
                 {{"p0", point(b.p0)}, {"p1", point(b.p1)}, {"p2", point(b.p2)}, {"w", b.w}, {"u", {b.u0, b.u1}}});
-        ojson j = {{"v0", e.v0()},   {"v1", e.v1()},   {"left", e.left()}, {"right", e.right()},
+        ojson j = {{"v0", e.v0()},   {"v1", e.v1()},   {"left", e.left()}, {"right", e.right()}, {"component", e.component()},
                   {"kind", kind_name(e.kind())}, {"r0", e.r0()}, {"r1", e.r1()}, {"bezier", std::move(bezier)}};
         if (options.chord_tol > 0.0) {
             poly.clear();
@@ -190,24 +191,36 @@ std::string write_mat_json(const MedialAxis& mat, std::span<const OffsetLoops> o
 
     ojson offs = ojson::array();
     for (const OffsetLoops& o : offsets) {
-        ojson loops = ojson::array();
-        for (const Loop& loop : o.loops) {
-            ojson vs = ojson::array();
-            for (const BulgeVertex& v : loop.vertices) vs.push_back({v.p.x, v.p.y, v.bulge});
-            loops.push_back(std::move(vs));
+        ojson comps = ojson::array();
+        for (const std::vector<Loop>& component : o.components) {
+            ojson loops = ojson::array();
+            for (const Loop& loop : component) {
+                ojson vs = ojson::array();
+                for (const BulgeVertex& v : loop.vertices) vs.push_back({v.p.x, v.p.y, v.bulge});
+                loops.push_back(std::move(vs));
+            }
+            comps.push_back(std::move(loops));
         }
-        offs.push_back({{"distance", o.distance}, {"loops", std::move(loops)}});
+        offs.push_back({{"distance", o.distance}, {"components", std::move(comps)}});
     }
 
     const RunStats& st = mat.stats();
     const ojson stats = {{"collapses", st.collapses},       {"transitions", st.transitions},
                         {"curvature_ends", st.curvature_ends}, {"splits", st.splits},
-                        {"contacts", st.contacts},         {"annihilations", st.annihilations},
+                        {"contacts", st.contacts},         {"merges", st.merges},         {"annihilations", st.annihilations},
                         {"clusters", st.clusters},         {"stale_events", st.stale_events},
                         {"windows", st.windows},           {"max_residual", st.max_residual}};
 
+    ojson comps = ojson::array();
+    for (const MatComponent& c : mat.components())
+        comps.push_back({{"outer", c.outer},
+                         {"holes", c.holes},
+                         {"vertices", {c.first_vertex, c.vertex_count}},
+                         {"edges", {c.first_edge, c.edge_count}}});
+
     ojson doc = ojson::object();
     if (!options.units.empty()) doc["units"] = options.units;
+    doc["components"] = std::move(comps);
     doc["sites"] = std::move(sites);
     doc["vertices"] = std::move(vertices);
     doc["edges"] = std::move(edges);

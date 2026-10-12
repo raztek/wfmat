@@ -293,21 +293,23 @@ void append_piece(const Site& s, const detail::Engine::FrontPiece& piece, double
 
 } // namespace
 
-Result<std::vector<Loop>> inward_offset(const Region& region, double distance, const Options& options)
+Result<std::vector<std::vector<Loop>>> inward_offset(const Region& region, double distance, const Options& options)
 {
     auto prepared = prepare(region, options);
     if (!prepared) return tl::unexpected(prepared.error());
     return inward_offset(*prepared, distance, options);
 }
 
-Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double distance, const Options& options)
+Result<std::vector<std::vector<Loop>>> inward_offset(const PreparedRegion& region, double distance,
+                                                     const Options& options)
 {
     if (!(distance >= 0.0) || !std::isfinite(distance))
         return make_error(ErrorCode::invalid_input, "ALG-06", "the offset distance must be finite and not negative");
     const double t = region.xf.length_to_unit(distance);
     const double eps = options.tol.len;
-    std::vector<Loop> loops;
+    std::vector<std::vector<Loop>> components;
     for (std::uint32_t c = 0; c < component_count(region); ++c) {
+        std::vector<Loop>& loops = components.emplace_back();
         detail::Engine engine(region, options, c);
         if (auto r = engine.run(t); !r) return tl::unexpected(in_component(r.error(), region, c));
         for (const auto& front : engine.front_at(t)) {
@@ -317,7 +319,7 @@ Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double dis
             if (!loop.vertices.empty()) loops.push_back(std::move(loop));
         }
     }
-    return loops;
+    return components;
 }
 
 } // namespace wfmat

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(wfmat VERSION 1.0.0 LANGUAGES CXX
+project(wfmat VERSION 2.0.0 LANGUAGES CXX
         DESCRIPTION "Wavefront medial axis transform of regions bounded by lines and circular arcs")
 
 option(WFMAT_BUILD_TESTS "Build the test suite" ${PROJECT_IS_TOP_LEVEL})

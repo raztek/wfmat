@@ -44,7 +44,7 @@ Each approved spec version is tagged `spec-vX.Y`. The public API is documented i
   an SVG with the axis coloured by radius and the offsets, CLI options for all of these, and the
   API documentation. Merging a project version of 1.0.0 or later tags `vX.Y.Z`.
 
-Version 2 (holes) is in progress, specified in spec 2.x:
+Version 2 (holes), specified in spec 2.x:
 
 - M4.1 (input): a region is a list of disjoint loops, at most 8 levels deep, counter-clockwise
   at even depth and clockwise at odd depth (checked, never reversed). Each outer loop with the
@@ -54,6 +54,10 @@ Version 2 (holes) is in progress, specified in spec 2.x:
   cluster. The axis of each component is connected with one cycle per hole, checked on annuli,
   square and constant-width rings, disks with up to six holes, nested islands and a plate with
   holes, against the sampled Voronoi oracle, the all-pairs broad phase and `resolve_all_events`.
+- M4.3 (release, version 2.0.0): inward offsets and the MAT JSON grouped by component, the CLI
+  and example with holes, 400 random regions with holes against the property checks and the
+  oracle, and a pinned vcpkg registry for Visual Studio 2026. `docs/api.md` lists the changes
+  from 1.x.
 
 `ErrorCode::unsupported` is now only the code for valid input that a later milestone handles;
 no input currently gets it. See section 13 of the spec.
@@ -76,7 +80,9 @@ FetchContent; `-DWFMAT_FETCH_DEPS=ON` fetches everything. `tl::expected` falls b
 in `third_party/`.
 
 With Visual Studio 2026, set `VCPKG_ROOT` (the Visual Studio vcpkg component or a vcpkg clone)
-and use the `vs2026` preset, from a terminal or by opening the folder in Visual Studio:
+and use the `vs2026` preset, from a terminal or by opening the folder in Visual Studio.
+`vcpkg-configuration.json` pins the vcpkg registry (the 2026.07.29 release), which Visual Studio's
+bundled vcpkg requires:
 
 ```bat
 cmake --preset vs2026

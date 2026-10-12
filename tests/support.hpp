@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 
 #include "wfmat/io/json.hpp"
+#include "wfmat/mat.hpp"
 #include "wfmat/prepare.hpp"
 
 namespace wfmat::test {
@@ -35,6 +36,16 @@ inline PreparedRegion prepared(const Region& region, const Options& options = {}
     auto r = prepare(region, options);
     if (!r) FAIL(to_string(r.error()));
     return *r;
+}
+
+// The inward offset with the loops of every component in one list.
+inline Result<std::vector<Loop>> offset_loops(const PreparedRegion& region, double distance)
+{
+    auto comps = inward_offset(region, distance);
+    if (!comps) return tl::unexpected(comps.error());
+    std::vector<Loop> out;
+    for (const auto& c : *comps) out.insert(out.end(), c.begin(), c.end());
+    return out;
 }
 
 inline Region polygon(std::initializer_list<Vec2> points)
