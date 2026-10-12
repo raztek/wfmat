@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <string>
 
 #include "engine.hpp"
 
@@ -165,41 +166,84 @@ Result<MedialAxis> compute_mat(const Region& region, const Options& options)
 
 namespace {
 
-// [API-03] Regions of more than one loop need the engine of milestone M4.2.
-Result<void> single_loop(const PreparedRegion& region)
+std::uint32_t component_count(const PreparedRegion& region)
 {
-    if (region.loops.size() <= 1) return {};
-    return make_error(ErrorCode::unsupported, "M4.2",
-                      "regions of more than one loop (holes, islands) are not computed yet; they arrive in M4.2");
+    return region.components.empty() ? 1u : static_cast<std::uint32_t>(region.components.size());
+}
+
+// A failure inside one component of a region with several names the component.
+Error in_component(Error e, const PreparedRegion& region, std::uint32_t c)
+{
+    if (component_count(region) > 1) e.message = "component " + std::to_string(c) + ": " + e.message;
+    return e;
 }
 
 } // namespace
 
+// [ALG-07] One engine per component, in component order; their results are concatenated [OUT-11].
 Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& options)
 {
-    if (auto one = single_loop(region); !one) return tl::unexpected(one.error());
-    detail::Engine engine(region, options);
-    if (auto r = engine.run(); !r) return tl::unexpected(r.error());
     const Transform& xf = region.xf;
-
-    std::vector<MatSite> sites = std::move(engine.site_info);
-    for (std::size_t i = 0; i < sites.size(); ++i) sites[i].geometry = to_caller(engine.sites[i], xf);
-
+    std::vector<MatSite> sites;
     std::vector<MatVertex> vertices;
-    vertices.reserve(engine.mat_vertices.size());
-    for (const auto& v : engine.mat_vertices) {
-        MatVertex out{xf.from_unit(v.p), xf.length_from_unit(v.t), v.kind, v.contacts, {}};
-        for (MatContact& c : out.contacts) c.foot = xf.from_unit(c.foot);
-        vertices.push_back(std::move(out));
-    }
-
     std::vector<MatEdge> edges;
-    edges.reserve(engine.mat_edges.size());
-    for (const MatEdge::Data& d : engine.mat_edges) {
-        const auto id = static_cast<EdgeId>(edges.size());
-        edges.emplace_back(d);
-        vertices[d.v0].edges.push_back(id);
-        vertices[d.v1].edges.push_back(id);
+    std::vector<MatComponent> components;
+    RunStats stats;
+    for (std::uint32_t c = 0; c < component_count(region); ++c) {
+        detail::Engine engine(region, options, c);
+        if (auto r = engine.run(); !r) return tl::unexpected(in_component(r.error(), region, c));
+        const auto site_base = static_cast<SiteId>(sites.size());
+        const auto vertex_base = static_cast<VertexId>(vertices.size());
+        const auto edge_base = static_cast<EdgeId>(edges.size());
+
+        for (std::size_t i = 0; i < engine.site_info.size(); ++i) {
+            MatSite site = engine.site_info[i];
+            site.geometry = to_caller(engine.sites[i], xf);
+            sites.push_back(site);
+        }
+        for (const auto& v : engine.mat_vertices) {
+            MatVertex out{xf.from_unit(v.p), xf.length_from_unit(v.t), v.kind, v.contacts, {}, c};
+            for (MatContact& k : out.contacts) {
+                k.foot = xf.from_unit(k.foot);
+                k.site += site_base;
+            }
+            vertices.push_back(std::move(out));
+        }
+        for (MatEdge::Data d : engine.mat_edges) {
+            d.v0 += vertex_base;
+            d.v1 += vertex_base;
+            d.left += site_base;
+            d.right += site_base;
+            d.component = c;
+            const auto id = static_cast<EdgeId>(edges.size());
+            edges.emplace_back(d);
+            vertices[d.v0].edges.push_back(id);
+            vertices[d.v1].edges.push_back(id);
+        }
+
+        MatComponent comp;
+        if (!region.components.empty()) {
+            comp.outer = region.components[c].outer;
+            comp.holes = region.components[c].holes;
+        }
+        comp.first_vertex = vertex_base;
+        comp.vertex_count = static_cast<VertexId>(vertices.size()) - vertex_base;
+        comp.first_edge = edge_base;
+        comp.edge_count = static_cast<EdgeId>(edges.size()) - edge_base;
+        components.push_back(std::move(comp));
+
+        const RunStats& st = engine.stats;
+        stats.collapses += st.collapses;
+        stats.transitions += st.transitions;
+        stats.curvature_ends += st.curvature_ends;
+        stats.splits += st.splits;
+        stats.contacts += st.contacts;
+        stats.annihilations += st.annihilations;
+        stats.merges += st.merges;
+        stats.clusters += st.clusters;
+        stats.stale_events += st.stale_events;
+        stats.windows += st.windows;
+        stats.max_residual = std::max(stats.max_residual, st.max_residual);
     }
 
     // [OUT-01] Incident edges counter-clockwise, by the direction in which each leaves the vertex.
@@ -216,9 +260,8 @@ Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& opti
         });
     }
 
-    RunStats stats = engine.stats;
     stats.max_residual = xf.length_from_unit(stats.max_residual);
-    return MedialAxis(std::move(vertices), std::move(edges), std::move(sites), stats, xf);
+    return MedialAxis(std::move(vertices), std::move(edges), std::move(sites), std::move(components), stats, xf);
 }
 
 namespace {
@@ -261,16 +304,18 @@ Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double dis
 {
     if (!(distance >= 0.0) || !std::isfinite(distance))
         return make_error(ErrorCode::invalid_input, "ALG-06", "the offset distance must be finite and not negative");
-    if (auto one = single_loop(region); !one) return tl::unexpected(one.error());
     const double t = region.xf.length_to_unit(distance);
-    detail::Engine engine(region, options);
-    if (auto r = engine.run(t); !r) return tl::unexpected(r.error());
     const double eps = options.tol.len;
     std::vector<Loop> loops;
-    for (const auto& front : engine.front_at(t)) {
-        Loop loop;
-        for (const auto& piece : front) append_piece(engine.sites[piece.site], piece, t, region.xf, eps, loop.vertices);
-        if (!loop.vertices.empty()) loops.push_back(std::move(loop));
+    for (std::uint32_t c = 0; c < component_count(region); ++c) {
+        detail::Engine engine(region, options, c);
+        if (auto r = engine.run(t); !r) return tl::unexpected(in_component(r.error(), region, c));
+        for (const auto& front : engine.front_at(t)) {
+            Loop loop;
+            for (const auto& piece : front)
+                append_piece(engine.sites[piece.site], piece, t, region.xf, eps, loop.vertices);
+            if (!loop.vertices.empty()) loops.push_back(std::move(loop));
+        }
     }
     return loops;
 }

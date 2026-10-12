@@ -26,9 +26,10 @@
 
 namespace wfmat::test {
 
-// [VER-04] Residual of the radius function, at least two feet inside every edge, a tree whose
-// vertex degrees match their kinds. Tolerances are relative to the half-diagonal L. Returns an
-// empty string when everything holds, otherwise the first failure.
+// [VER-04] Residual of the radius function, at least two feet inside every edge, per component a
+// connected axis with one cycle per hole [OUT-08], and vertex degrees that match their kinds.
+// Tolerances are relative to the half-diagonal L. Returns an empty string when everything holds,
+// otherwise the first failure.
 inline std::string sci(double x)
 {
     char buf[32];
@@ -45,25 +46,49 @@ inline std::string check_mat(const PreparedRegion& region, const MedialAxis& mat
     const auto edges = mat.edges();
     auto where = [](const char* what, std::size_t i) { return std::string(what) + " " + std::to_string(i) + ": "; };
 
-    if (vertices.size() != edges.size() + 1)
-        return "not a tree: " + std::to_string(vertices.size()) + " vertices, " + std::to_string(edges.size()) + " edges";
+    // [OUT-08], [OUT-11] Per component: a connected axis with one independent cycle per hole.
+    const auto comps = mat.components();
+    if (comps.size() != std::max<std::size_t>(region.components.size(), 1))
+        return std::to_string(comps.size()) + " components in the MAT";
     std::vector<std::size_t> parent(vertices.size());
     std::iota(parent.begin(), parent.end(), std::size_t{0});
     auto find = [&](std::size_t x) {
         while (parent[x] != x) x = parent[x] = parent[parent[x]];
         return x;
     };
-    for (const MatEdge& e : edges) {
-        const std::size_t a = find(e.v0()), b = find(e.v1());
-        if (a == b) return "the MAT has a cycle";
-        parent[a] = b;
+    std::vector<std::size_t> vertex_count(comps.size()), edge_count(comps.size());
+    for (std::size_t i = 0; i < vertices.size(); ++i) {
+        const std::uint32_t k = vertices[i].component;
+        if (k >= comps.size() || i < comps[k].first_vertex || i >= comps[k].first_vertex + comps[k].vertex_count)
+            return where("vertex", i) + "outside the range of its component";
+        ++vertex_count[k];
+    }
+    for (std::size_t i = 0; i < edges.size(); ++i) {
+        const MatEdge& e = edges[i];
+        const std::uint32_t k = e.component();
+        if (k >= comps.size() || i < comps[k].first_edge || i >= comps[k].first_edge + comps[k].edge_count)
+            return where("edge", i) + "outside the range of its component";
+        if (vertices[e.v0()].component != k || vertices[e.v1()].component != k)
+            return where("edge", i) + "joins vertices of another component";
+        ++edge_count[k];
+        parent[find(e.v0())] = find(e.v1());
+    }
+    for (std::size_t k = 0; k < comps.size(); ++k) {
+        const std::size_t holes = comps[k].holes.size();
+        if (vertex_count[k] != comps[k].vertex_count || edge_count[k] != comps[k].edge_count ||
+            vertex_count[k] == 0 || edge_count[k] + 1 != vertex_count[k] + holes)
+            return "component " + std::to_string(k) + ": " + std::to_string(vertex_count[k]) + " vertices, " +
+                   std::to_string(edge_count[k]) + " edges for " + std::to_string(holes) + " holes";
+        const std::size_t root = find(comps[k].first_vertex);
+        for (std::size_t i = comps[k].first_vertex; i < comps[k].first_vertex + comps[k].vertex_count; ++i)
+            if (find(i) != root) return "component " + std::to_string(k) + ": the axis is not connected";
     }
 
     for (std::size_t i = 0; i < vertices.size(); ++i) {
         const MatVertex& v = vertices[i];
         const std::size_t deg = v.edges.size();
         // A disk's MAT is its centre alone, a curvature end of degree 0.
-        const std::size_t ends = vertices.size() == 1 ? 0 : 1;
+        const std::size_t ends = comps[v.component].vertex_count == 1 ? 0 : 1;
         const bool deg_ok = v.kind == VertexKind::corner || v.kind == VertexKind::curvature_end ? deg == ends
                             : v.kind == VertexKind::junction                                     ? deg >= 3
                                                                                                  : deg == 2;
@@ -324,41 +349,50 @@ inline SampledComparison compare_with_sampled_voronoi(const PreparedRegion& regi
     // Flatten in the unit frame, then round to the integer grid. Chord angles of at most
     // pi / (chords sqrt(max(R, 1))) keep every sagitta R phi^2 / 8 within (pi / chords)^2 / 8,
     // however flat the arc.
-    std::vector<Vec2> pts;
-    std::vector<std::int32_t> owner;  // the arc a point lies inside of, or -1 at a region corner or on a line
-    std::vector<std::int32_t> chord;  // the arc the chord from a point flattens, or -1 for a line
-    for (std::size_t i = 0; i < region.segments.size(); ++i) {
-        const Segment& s = region.segments[i];
-        const int m = s.is_arc() ? std::max(1, static_cast<int>(std::ceil(std::abs(s.sweep) * std::sqrt(std::max(s.R, 1.0)) *
-                                                                         chords / std::numbers::pi)))
-                                 : 1;
-        for (int k = 0; k < m; ++k) {
-            pts.push_back(s.point(double(k) / m));
-            owner.push_back(k == 0 ? -1 : static_cast<std::int32_t>(i));
-            chord.push_back(s.is_arc() ? static_cast<std::int32_t>(i) : -1);
-        }
-    }
     std::vector<bp::segment_data<std::int32_t>> isegs;
     std::vector<std::pair<Vec2, Vec2>> segs;  // the same, in caller units
     std::vector<bp::point_data<std::int32_t>> ip;
     std::vector<std::int32_t> arc_of_point, arc_of_chord;  // the arc a point or chord belongs to, or -1
-    for (std::size_t k = 0; k < pts.size(); ++k) {
-        const bp::point_data<std::int32_t> q(static_cast<std::int32_t>(std::lround(pts[k].x * grid)),
-                                             static_cast<std::int32_t>(std::lround(pts[k].y * grid)));
-        if (!ip.empty() && q == ip.back()) continue;
-        ip.push_back(q);
-        arc_of_point.push_back(owner[k]);
-        arc_of_chord.push_back(chord[k]);
-    }
-    if (ip.size() > 1 && ip.front() == ip.back()) {
-        ip.pop_back();
-        arc_of_point.pop_back();
-        arc_of_chord.pop_back();
-    }
+    std::vector<std::size_t> next_point;                    // the end of the chord from a point
     auto caller = [&](const bp::point_data<std::int32_t>& q) { return xf.from_unit(Vec2{double(q.x()), double(q.y())} / grid); };
-    for (std::size_t i = 0; i < ip.size(); ++i) {
-        isegs.emplace_back(ip[i], ip[(i + 1) % ip.size()]);
-        segs.emplace_back(caller(ip[i]), caller(ip[(i + 1) % ip.size()]));
+    const std::size_t nloops = std::max<std::size_t>(region.loops.size(), 1);
+    for (std::size_t l = 0; l < nloops; ++l) {
+        const std::size_t first = region.loops.empty() ? 0 : region.loops[l].first;
+        const std::size_t count = region.loops.empty() ? region.segments.size() : region.loops[l].count;
+        std::vector<Vec2> pts;
+        std::vector<std::int32_t> owner;  // the arc a point lies inside of, or -1 at a region corner or on a line
+        std::vector<std::int32_t> chord;  // the arc the chord from a point flattens, or -1 for a line
+        for (std::size_t i = first; i < first + count; ++i) {
+            const Segment& s = region.segments[i];
+            const int m = s.is_arc() ? std::max(1, static_cast<int>(std::ceil(std::abs(s.sweep) * std::sqrt(std::max(s.R, 1.0)) *
+                                                                             chords / std::numbers::pi)))
+                                     : 1;
+            for (int k = 0; k < m; ++k) {
+                pts.push_back(s.point(double(k) / m));
+                owner.push_back(k == 0 ? -1 : static_cast<std::int32_t>(i));
+                chord.push_back(s.is_arc() ? static_cast<std::int32_t>(i) : -1);
+            }
+        }
+        const std::size_t base = ip.size();
+        for (std::size_t k = 0; k < pts.size(); ++k) {
+            const bp::point_data<std::int32_t> q(static_cast<std::int32_t>(std::lround(pts[k].x * grid)),
+                                                 static_cast<std::int32_t>(std::lround(pts[k].y * grid)));
+            if (ip.size() > base && q == ip.back()) continue;
+            ip.push_back(q);
+            arc_of_point.push_back(owner[k]);
+            arc_of_chord.push_back(chord[k]);
+        }
+        if (ip.size() > base + 1 && ip[base] == ip.back()) {
+            ip.pop_back();
+            arc_of_point.pop_back();
+            arc_of_chord.pop_back();
+        }
+        for (std::size_t i = base; i < ip.size(); ++i) {
+            const std::size_t n = i + 1 < ip.size() ? i + 1 : base;
+            next_point.push_back(n);
+            isegs.emplace_back(ip[i], ip[n]);
+            segs.emplace_back(caller(ip[i]), caller(ip[n]));
+        }
     }
     bp::voronoi_diagram<double> vd;
     bp::construct_voronoi(isegs.begin(), isegs.end(), &vd);
@@ -412,7 +446,7 @@ inline SampledComparison compare_with_sampled_voronoi(const PreparedRegion& regi
         auto arc = [&](const bp::voronoi_cell<double>& c) {
             const std::size_t i = c.source_index();
             if (c.source_category() == bp::SOURCE_CATEGORY_SEGMENT_START_POINT) return arc_of_point[i];
-            if (c.source_category() == bp::SOURCE_CATEGORY_SEGMENT_END_POINT) return arc_of_point[(i + 1) % ip.size()];
+            if (c.source_category() == bp::SOURCE_CATEGORY_SEGMENT_END_POINT) return arc_of_point[next_point[i]];
             return arc_of_chord[i];
         };
         const std::int32_t a0 = arc(*e.cell()), a1 = arc(*e.twin()->cell());

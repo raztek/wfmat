@@ -1,5 +1,7 @@
 #include "engine.hpp"
 
+#include "wfmat/validate.hpp"
+
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -80,8 +82,8 @@ std::string point_text(Vec2 p, double t)
     return buf;
 }
 
-Engine::Engine(const PreparedRegion& region, const Options& options)
-    : region_(region), tol_(options.tol), debug_(options.debug_checks), resolve_all_(options.resolve_all_events),
+Engine::Engine(const PreparedRegion& region, const Options& options, std::uint32_t component)
+    : region_(region), component_(component), tol_(options.tol), debug_(options.debug_checks), resolve_all_(options.resolve_all_events),
       windowed_(options.broad_phase == BroadPhase::windowed_rtree)
 {
     // No window is open yet: the first one opens before the first event [EV-11].
@@ -111,6 +113,11 @@ Result<void> Engine::run(double stop)
         ++window_events_;
         const std::vector<Event> cluster = gather_cluster(ev);
         t_now_ = std::max(t_now_, ev.t);
+        // [EV-09] The contacts resolved here at t_now, which the new pieces must not find again.
+        if (resolved_.empty() || ev.t > resolved_t_ + tol_.time) resolved_.clear();
+        resolved_t_ = t_now_;
+        for (const Event& c : cluster)
+            if (c.kind == EventKind::contact) resolved_.push_back(c.p);
         Result<void> r;
         if (cluster.size() > 1 || ev.kind == EventKind::plateau || resolve_all_)
             r = resolve_cluster(cluster);
@@ -152,16 +159,51 @@ std::vector<std::vector<Engine::FrontPiece>> Engine::front_at(double t) const
 // [ALG-03] One element per site in boundary order, a point element at every reflex corner, a
 // shock at every convex corner, a regular vertex at every tangent join and one on each side of a
 // reflex corner. A regular vertex moves along the inward normal of its segment at the join.
+// [ALG-07] Every loop of the component (its outer loop, then its holes) becomes one front loop.
 Result<void> Engine::initialise()
 {
+    std::vector<std::uint32_t> loops;
+    if (region_.components.empty()) {
+        loops.push_back(0);
+    } else {
+        const PreparedComponent& comp = region_.components[component_];
+        loops.push_back(comp.outer);
+        loops.insert(loops.end(), comp.holes.begin(), comp.holes.end());
+    }
+    for (std::uint32_t k = 0; k < loops.size(); ++k)
+        if (auto r = initialise_loop(loops[k], k); !r) return r;
+    next_loop_ = static_cast<std::uint32_t>(loops.size());
+    // One face, bounded by the outer loop and every hole [EV-09].
+    face_.assign(loops.size(), 0);
+    face_loops_.assign(1, static_cast<std::uint32_t>(loops.size()));
+
+    const auto m = static_cast<std::uint32_t>(elements_.size());
+    for (std::uint32_t e = 0; e < m; ++e) schedule_collapse(e);
+    if (windowed_) return {};  // non-local candidates come from the first window
+    for (std::uint32_t v = 0; v < vertices_.size(); ++v)
+        for (std::uint32_t e = 0; e < m; ++e) schedule_split(v, e);
+    for (std::uint32_t x = 0; x < m; ++x)
+        for (std::uint32_t y = x + 1; y < m; ++y) schedule_contact(x, y);
+    return {};
+}
+
+// One boundary loop of the prepared region as front loop id.
+Result<void> Engine::initialise_loop(std::uint32_t input_loop, std::uint32_t id)
+{
+    PreparedLoop whole;
+    whole.count = static_cast<std::uint32_t>(region_.segments.size());
+    const PreparedLoop& pl = region_.loops.empty() ? whole : region_.loops[input_loop];
     const auto& segs = region_.segments;
-    const std::size_t n = segs.size();
+    const std::size_t n = pl.count;
+    auto seg = [&](std::size_t i) { return pl.first + i; };
 
     std::vector<std::uint32_t> line(n), corner(n, no_id);  // segment and reflex-corner elements
     for (std::uint32_t i = 0; i < n; ++i) {
-        line[i] = add_element(add_site(site_of(segs[i]), region_.sources[i].front(), false), 0);
-        if (region_.joins[i].kind == JoinKind::reflex)
-            corner[i] = add_element(add_site(Site::point(region_.joins[i].p), region_.sources[i].back(), true), 0);
+        const std::size_t g = seg(i);
+        line[i] = add_element(add_site(site_of(segs[g]), input_loop, region_.sources[g].front(), false), id);
+        if (region_.joins[g].kind == JoinKind::reflex)
+            corner[i] = add_element(
+                add_site(Site::point(region_.joins[g].p), input_loop, region_.sources[g].back(), true), id);
     }
 
     auto link = [&](std::uint32_t v) {
@@ -179,7 +221,7 @@ Result<void> Engine::initialise()
         link(static_cast<std::uint32_t>(vertices_.size() - 1));
     };
     for (std::uint32_t i = 0; i < n; ++i) {
-        const Join& join = region_.joins[i];
+        const Join& join = region_.joins[seg(i)];
         const std::uint32_t next = line[(i + 1) % n];
         if (join.kind == JoinKind::reflex) {
             regular(line[i], corner[i], join.p, site(line[i]).gradient(join.p));
@@ -193,14 +235,6 @@ Result<void> Engine::initialise()
             link(*v);
         }
     }
-
-    const auto m = static_cast<std::uint32_t>(elements_.size());
-    for (std::uint32_t e = 0; e < m; ++e) schedule_collapse(e);
-    if (windowed_) return {};  // non-local candidates come from the first window
-    for (std::uint32_t v = 0; v < vertices_.size(); ++v)
-        for (std::uint32_t e = 0; e < m; ++e) schedule_split(v, e);
-    for (std::uint32_t x = 0; x < m; ++x)
-        for (std::uint32_t y = x + 1; y < m; ++y) schedule_contact(x, y);
     return {};
 }
 
@@ -274,10 +308,10 @@ std::size_t Engine::loop_size(std::uint32_t element, std::size_t limit) const
     return k;
 }
 
-SiteId Engine::add_site(const Site& s, std::uint32_t segment, bool corner)
+SiteId Engine::add_site(const Site& s, std::uint32_t loop, std::uint32_t segment, bool corner)
 {
     sites.push_back(s);
-    site_info.push_back({s, segment, corner});
+    site_info.push_back({s, segment, corner, loop});
     return static_cast<SiteId>(sites.size() - 1);
 }
 
@@ -407,12 +441,161 @@ void Engine::relabel_loops(const std::vector<std::uint32_t>& starts)
         }
     }
     for (std::uint32_t start : closed) {
-        const std::uint32_t id = next_loop_++;
+        const std::uint32_t id = new_loop_id(elements_[start].loop);
         std::uint32_t x = start;
         do {
             elements_[x].loop = id;
             x = next_element(x);
         } while (x != start);
+    }
+}
+
+// After a cluster that joined pieces of several loops: every loop through a start element gets a
+// fresh id, walked in full. Such clusters are rare (one per merge at most), so the full walk is
+// cheap in total.
+void Engine::relabel_every_loop(const std::vector<std::uint32_t>& starts)
+{
+    ++epoch_;
+    if (mark_.size() < elements_.size()) mark_.resize(elements_.size(), 0);
+    const std::uint64_t seen = std::uint64_t{epoch_} << 32;
+    for (std::uint32_t start : starts) {
+        if (mark_[start] == seen) continue;
+        const std::uint32_t id = new_loop_id(elements_[start].loop);
+        std::uint32_t x = start;
+        do {
+            mark_[x] = seen;
+            elements_[x].loop = id;
+            x = next_element(x);
+        } while (x != start);
+    }
+}
+
+// [EV-09], [EV-14] Before an event joins the loop of x to the different loop of y: the two loops
+// are walked in lockstep, and the one that comes round first, the smaller, takes the other's id.
+void Engine::merge_loops(std::uint32_t x, std::uint32_t y)
+{
+    auto relabel = [&](std::uint32_t start, std::uint32_t id) {
+        std::uint32_t e = start;
+        do {
+            elements_[e].loop = id;
+            e = next_element(e);
+        } while (e != start);
+    };
+    for (std::uint32_t a = x, b = y;;) {
+        a = next_element(a);
+        if (a == x) {
+            relabel(x, elements_[y].loop);
+            break;
+        }
+        b = next_element(b);
+        if (b == y) {
+            relabel(y, elements_[x].loop);
+            break;
+        }
+    }
+    --face_loops_[face_of(x)];
+    ++stats.merges;
+}
+
+// The front loop through element at time t as boundary segments, in front order.
+std::vector<Segment> Engine::front_segments(std::uint32_t element, double t) const
+{
+    std::vector<Segment> out;
+    std::uint32_t e = element;
+    do {
+        const FrontElement& el = elements_[e];
+        const Site& s = sites[el.site];
+        const auto a = position(el.prev, t), b = position(el.next, t);
+        e = next_element(e);
+        if (!a || !b) continue;
+        if (s.is_line()) {
+            if (dist(*a, *b) > 0.0) out.push_back(make_segment(*a, *b, 0.0));
+            continue;
+        }
+        if (s.offset_radius(t) <= 0.0) continue;
+        // Convex arcs run counter-clockwise about the centre, concave arcs and points clockwise.
+        const Vec2 c = s.centre;
+        auto angle = [&](Vec2 q) { return std::atan2(q.y - c.y, q.x - c.x); };
+        double sweep = s.sigma * wrap_2pi(s.sigma * (angle(*b) - angle(*a)));
+        if (el.prev == el.next || (sweep == 0.0 && next_element(element) == element)) sweep = s.sigma * two_pi;
+        if (sweep == 0.0) continue;
+        // Halves, so that no piece is a whole circle.
+        const double r = s.offset_radius(t), a0 = angle(*a);
+        const Vec2 m = c + r * polar(a0 + 0.5 * sweep);
+        out.push_back(make_segment(*a, m, std::tan(sweep / 8.0)));
+        out.push_back(make_segment(m, *b, std::tan(sweep / 8.0)));
+    } while (e != element);
+    return out;
+}
+
+// A fresh loop id for a piece of loop old, in old's face.
+std::uint32_t Engine::new_loop_id(std::uint32_t old)
+{
+    face_.push_back(face_[old]);
+    return next_loop_++;
+}
+
+// [EV-09] After an event that split loops of face f, giving the ids from first_new on: a face that
+// had one loop splits into one face per piece; one with holes is re-derived from the geometry.
+void Engine::settle_face(std::uint32_t f, std::uint32_t first_new)
+{
+    if (first_new == next_loop_) return;
+    if (face_loops_[f] > 1) {
+        reface(f);
+        return;
+    }
+    for (std::uint32_t l = first_new; l < next_loop_; ++l) {
+        face_[l] = static_cast<std::uint32_t>(face_loops_.size());
+        face_loops_.push_back(1);
+    }
+}
+
+// [EV-09] Re-derives face f from the fronts at the current time: each counter-clockwise loop of f
+// bounds a face of its own (the first keeps f), and each clockwise (hole) loop joins the face of
+// the counter-clockwise loop around it. A pass over the elements, needed only while f has holes.
+void Engine::reface(std::uint32_t f)
+{
+    std::vector<std::uint32_t> rep(next_loop_, no_id), loops;
+    for (std::uint32_t e = 0; e < elements_.size(); ++e) {
+        const std::uint32_t l = elements_[e].loop;
+        if (!elements_[e].alive || face_[l] != f || rep[l] != no_id) continue;
+        rep[l] = e;
+        loops.push_back(l);
+    }
+    std::vector<std::uint32_t> ccw, cw;
+    std::vector<std::vector<Segment>> fronts(next_loop_);
+    for (std::uint32_t l : loops) {
+        fronts[l] = front_segments(rep[l], t_now_);
+        double area = 0.0;
+        for (const Segment& s : fronts[l]) area += 0.5 * cross(s.a, s.b) + s.cap_area();
+        (area > 0.0 ? ccw : cw).push_back(l);
+    }
+    std::sort(ccw.begin(), ccw.end());
+    face_loops_[f] = static_cast<std::uint32_t>(loops.size());
+    if (ccw.size() <= 1) return;
+    std::vector<std::uint32_t> face_of_ccw{f};
+    face_loops_[f] = 1;
+    for (std::size_t k = 1; k < ccw.size(); ++k) {
+        face_of_ccw.push_back(static_cast<std::uint32_t>(face_loops_.size()));
+        face_[ccw[k]] = face_of_ccw.back();
+        face_loops_.push_back(1);
+    }
+    for (std::uint32_t h : cw) {
+        // A point well inside a piece of the hole front, away from the event that made it.
+        const std::vector<Segment>& front = fronts[h];
+        const Segment* longest = nullptr;
+        for (const Segment& s : front)
+            if (!longest || s.length() > longest->length()) longest = &s;
+        if (!longest) continue;
+        const Vec2 q = longest->midpoint();
+        std::uint32_t g = f;
+        for (std::size_t k = 0; k < ccw.size(); ++k)
+            if (winding_number(fronts[ccw[k]], q) != 0) {
+                g = face_of_ccw[k];
+                break;
+            }
+        face_[h] = g;
+        ++face_loops_[g];
     }
 }
 
@@ -531,7 +714,7 @@ bool Engine::open_window()
         // The shock after e also moves along the next element, whose box must meet x's too.
         const Box& after = window_box_[next_element(e)];
         for (const auto& [other, x] : hits) {
-            if (x == e || elements_[x].loop != elements_[e].loop) continue;
+            if (x == e || face_of(x) != face_of(e)) continue;
             ++window_pairs_;
             if (e < x) schedule_contact(e, x);
             if (overlap(after, window_box_[x])) schedule_split(elements_[e].next, x);
@@ -551,25 +734,22 @@ void Engine::index_element(std::uint32_t e)
     index_->tree.insert({BroadIndex::to_bbox(window_box_[e]), e});
 }
 
-// The live elements of the loop of element whose window boxes meet b; all of the loop, in loop
-// order from element, when the broad phase is all_pairs.
+// The live elements whose window boxes meet b, on any loop of the component [EV-09]; every live
+// element, in id order, when the broad phase is all_pairs.
 void Engine::near_elements(const Box& b, std::uint32_t element, std::vector<std::uint32_t>& out)
 {
     out.clear();
+    const std::uint32_t face = face_of(element);
     if (!windowed_) {
-        std::uint32_t x = element;
-        do {
-            out.push_back(x);
-            x = next_element(x);
-        } while (x != element);
+        for (std::uint32_t x = 0; x < elements_.size(); ++x)
+            if (elements_[x].alive && face_of(x) == face) out.push_back(x);
         return;
     }
-    const std::uint32_t loop = elements_[element].loop;
     std::vector<BroadIndex::Item>& hits = index_->hits;
     hits.clear();
     index_->tree.query(bgi::intersects(BroadIndex::to_bbox(b)), std::back_inserter(hits));
     for (const auto& [box, x] : hits)
-        if (elements_[x].alive && elements_[x].loop == loop) out.push_back(x);
+        if (elements_[x].alive && face_of(x) == face) out.push_back(x);
     std::sort(out.begin(), out.end());
 }
 
@@ -667,7 +847,7 @@ void Engine::schedule_split(std::uint32_t v, std::uint32_t c)
     }
     const std::uint32_t a = vx.left, b = vx.right;
     if (c == a || c == b || c == prev_element(a) || c == next_element(b)) return;
-    if (elements_[c].loop != elements_[a].loop) return;
+    if (face_of(c) != face_of(a)) return;
     const SiteId sa = elements_[a].site, sb = elements_[b].site, sc = elements_[c].site;
     if (sc == sa || sc == sb) return;
 
@@ -696,7 +876,7 @@ void Engine::schedule_regular_split(std::uint32_t g, std::uint32_t c)
 {
     const FrontVertex& gv = vertices_[g];
     const std::uint32_t a = gv.left, b = gv.right;
-    if (c == a || c == b || elements_[c].loop != elements_[a].loop) return;
+    if (c == a || c == b || face_of(c) != face_of(a)) return;
     const SiteId sc = elements_[c].site;
     if (sc == elements_[a].site || sc == elements_[b].site) return;
 
@@ -760,7 +940,7 @@ void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
     if (x > y) std::swap(x, y);  // one orientation per pair, whoever asks [EV-12]
     if (!elements_[x].alive || !elements_[y].alive) return;
     if (y == x || y == prev_element(x) || y == next_element(x)) return;
-    if (elements_[x].loop != elements_[y].loop) return;
+    if (face_of(x) != face_of(y)) return;
     const SiteId sx = elements_[x].site, sy = elements_[y].site;
     if (sx == sy) return;
 
@@ -781,6 +961,9 @@ void Engine::schedule_contact(std::uint32_t x, std::uint32_t y)
             return;
         }
         if (!live(x, k.p, k.t) || !live(y, k.p, k.t)) continue;
+        if (k.t <= resolved_t_ + tol_.time &&
+            std::any_of(resolved_.begin(), resolved_.end(), [&](Vec2 q) { return dist(q, k.p) <= cluster_radius(); }))
+            continue;  // the pieces of a contact just resolved, on one loop after a merge
         ev.kind = EventKind::contact;
         push(ev);
         return;
@@ -835,10 +1018,10 @@ bool Engine::valid(const Event& ev) const
         const FrontElement& e = elements_[ev.elements[i]];
         if (!e.alive || e.version != ev.versions[i]) return false;
     }
-    if (n == 2 && elements_[ev.elements[0]].loop != elements_[ev.elements[1]].loop) return false;
+    if (n == 2 && face_of(ev.elements[0]) != face_of(ev.elements[1])) return false;
     if (ev.kind == EventKind::split) {
         const FrontVertex& v = vertices_[ev.vertex];
-        if (!v.alive || elements_[v.left].loop != elements_[ev.elements[0]].loop) return false;
+        if (!v.alive || face_of(v.left) != face_of(ev.elements[0])) return false;
     }
     return true;
 }
@@ -933,11 +1116,14 @@ Result<void> Engine::handle_collapse(const Event& ev)
 }
 
 // [EV-04] Shock (or regular vertex) A|B reaches element C: C splits into C1, C2; new shocks A|C2
-// and C1|B; the loop splits in two [EV-09].
+// and C1|B; the loop splits in two, or, when C is on another loop, the two loops merge [EV-09].
 Result<void> Engine::handle_split(const Event& ev)
 {
     const std::uint32_t v = ev.vertex, c = ev.elements[0];
     const std::uint32_t a = vertices_[v].left, b = vertices_[v].right;
+    const bool merge = elements_[c].loop != elements_[a].loop;
+    const std::uint32_t face = face_of(c), first_new = next_loop_;
+    if (merge) merge_loops(c, a);
     // A shock ends here: a junction. A regular vertex traced nothing: the two new edges both start
     // here, at a minimum of r.
     const bool shock = vertices_[v].type == VertexType::shock;
@@ -965,7 +1151,8 @@ Result<void> Engine::handle_split(const Event& ev)
     elements_[b].prev = *y;
     ++elements_[a].version;
     ++elements_[b].version;
-    relabel_loops({c1, c2});
+    if (!merge) relabel_loops({c1, c2});
+    settle_face(face, first_new);
     ++stats.splits;
 
     for (std::uint32_t e : {a, c2, b, c1}) reschedule_element(e);
@@ -975,10 +1162,13 @@ Result<void> Engine::handle_split(const Event& ev)
 }
 
 // [EV-05] X and Y touch at p: both split, and two shocks X1|Y2 and Y1|X2 move apart along the
-// bisector, one on each side of the common normal; the loop splits in two.
+// bisector, one on each side of the common normal; the loop splits in two, or two loops merge.
 Result<void> Engine::handle_contact(const Event& ev)
 {
     const std::uint32_t x = ev.elements[0], y = ev.elements[1];
+    const bool merge = elements_[x].loop != elements_[y].loop;
+    const std::uint32_t face = face_of(x), first_new = next_loop_;
+    if (merge) merge_loops(x, y);
     const std::uint32_t mv = add_mat_vertex(ev.p, ev.t, VertexKind::extremum_min, {x, y});
     const Vec2 tan = front_tangent(site(x), ev.p);
 
@@ -1006,7 +1196,8 @@ Result<void> Engine::handle_contact(const Event& ev)
     elements_[y2].prev = *u;
     elements_[y1].next = *w;
     elements_[x2].prev = *w;
-    relabel_loops({y1, x1});
+    if (!merge) relabel_loops({y1, x1});
+    settle_face(face, first_new);
     ++stats.contacts;
 
     for (std::uint32_t e : {x1, y2, y1, x2}) reschedule_element(e);
