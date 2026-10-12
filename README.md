@@ -90,6 +90,10 @@ cmake --build --preset vs2026-release
 ctest --preset vs2026-release
 ```
 
+Step-by-step Windows instructions, including the IDE and running the CLI on the sample shapes, are
+in [`docs/building-windows.md`](docs/building-windows.md). The input JSON format, with how circular
+arcs are given as bulges, is explained in [`docs/input-format.md`](docs/input-format.md).
+
 | Dependency | Licence | Used by |
 | --- | --- | --- |
 | Boost.Geometry, Multiprecision, Math (header-only) | BSL-1.0 | core |
@@ -113,7 +117,7 @@ fast-math [LIB-03].
 | `tests/` | Catch2 tests; `tests/data/` holds the canonical shapes and kernel fixtures |
 | `bench/` | Google Benchmark suite (`wfmat-bench`) and its scaled shape families |
 | `tools/fixtures/` | fixture generator for the kernel tests (SymPy, `gen_kernel_fixtures.py`) |
-| `docs/` | specification sources and PDF, API documentation (`api.md`) |
+| `docs/` | specification sources and PDF, API documentation (`api.md`), Windows build guide (`building-windows.md`), input format guide (`input-format.md`) |
 
 ## Tests and requirement IDs
 
