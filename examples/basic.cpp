@@ -1,5 +1,5 @@
-// The example of docs/api.md: the medial axis of a filleted slot-like plate, its edges as Bezier
-// arcs and polylines, and an inward offset. Built with the tools (WFMAT_BUILD_TOOLS).
+// The example of docs/api.md: the medial axis of a slot-like plate with a round hole, its edges as
+// Bezier arcs and polylines, and an inward offset. Built with the tools (WFMAT_BUILD_TOOLS).
 #include <cstdio>
 #include <vector>
 
@@ -10,16 +10,18 @@ int main()
     using namespace wfmat;
 
     // 100 x 40 with a half-disk on the right end: vertex i starts segment i; bulge = tan(sweep / 4),
-    // so 1 is a counter-clockwise half circle.
-    Region plate{{Loop{}}};
+    // so 1 is a counter-clockwise half circle. The hole, a circle of radius 8, runs clockwise.
+    Region plate{{Loop{}, Loop{}}};
     plate.loops[0].vertices = {{{0, 0}, 0.0}, {{100, 0}, 1.0}, {{100, 40}, 0.0}, {{0, 40}, 0.0}};
+    plate.loops[1].vertices = {{{48, 20}, -1.0}, {{32, 20}, -1.0}};
 
     auto mat = compute_mat(plate);
     if (!mat) {
         std::fprintf(stderr, "%s\n", to_string(mat.error()).c_str());
         return 1;
     }
-    std::printf("wfmat %s: %zu vertices, %zu edges\n", version, mat->vertices().size(), mat->edges().size());
+    std::printf("wfmat %s: %zu vertices, %zu edges, %zu component(s)\n", version, mat->vertices().size(),
+                mat->edges().size(), mat->components().size());
 
     for (const MatEdge& e : mat->edges()) {
         const MatVertex& a = mat->vertices()[e.v0()];
@@ -40,10 +42,11 @@ int main()
         std::fprintf(stderr, "%s\n", to_string(offset.error()).c_str());
         return 1;
     }
-    for (const Loop& loop : *offset) {
-        std::printf("offset loop:");
-        for (const BulgeVertex& v : loop.vertices) std::printf(" (%.3f, %.3f; %.3f)", v.p.x, v.p.y, v.bulge);
-        std::printf("\n");
-    }
+    for (const std::vector<Loop>& component : *offset)
+        for (const Loop& loop : component) {
+            std::printf("offset loop:");
+            for (const BulgeVertex& v : loop.vertices) std::printf(" (%.3f, %.3f; %.3f)", v.p.x, v.p.y, v.bulge);
+            std::printf("\n");
+        }
     return 0;
 }

@@ -592,6 +592,49 @@ inline Region random_arc_chain(std::mt19937_64& rng, int n)
     return region;
 }
 
+// [VER-05] A random region with holes: a star polygon (or, with arcs, a filleted one) with one to
+// four holes inside it, each a small clockwise star polygon (with arcs: a circle or a filleted
+// star). Holes that would cross the outer loop or each other are drawn again.
+inline Region random_holed(std::mt19937_64& rng, bool arcs)
+{
+    std::uniform_int_distribution<int> outer_n(12, 40), hole_n(5, 12), holes(1, 4);
+    std::uniform_real_distribution<double> unit_d(0.0, 1.0);
+    for (;;) {
+        Region region = arcs ? random_filleted(rng, outer_n(rng)) : to_region(random_star_polygon(rng, outer_n(rng)));
+        const int m = holes(rng);
+        for (int tries = 0; static_cast<int>(region.loops.size()) <= m && tries < 50; ++tries) {
+            const double a = 2.0 * std::numbers::pi * unit_d(rng), d = 6e5 * std::sqrt(unit_d(rng));
+            const auto hr = static_cast<std::int32_t>(4e4 + 1.2e5 * unit_d(rng));
+            const IPoint c{static_cast<std::int32_t>(std::lround(d * std::cos(a))),
+                           static_cast<std::int32_t>(std::lround(d * std::sin(a)))};
+            Loop hole;
+            if (arcs && unit_d(rng) < 0.5) {
+                const Vec2 cc{double(c.first), double(c.second)};
+                hole.vertices = {{cc + Vec2{double(hr), 0.0}, -1.0}, {cc - Vec2{double(hr), 0.0}, -1.0}};
+            } else {
+                Region star;
+                if (arcs) {
+                    star = random_filleted(rng, hole_n(rng));
+                    for (BulgeVertex& v : star.loops[0].vertices) v.p = v.p * (double(hr) / 1e6);
+                } else {
+                    star = to_region(random_star_polygon(rng, hole_n(rng), hr));
+                }
+                for (BulgeVertex& v : star.loops[0].vertices) v.p = v.p + Vec2{double(c.first), double(c.second)};
+                // Clockwise: the same segments run backwards.
+                const auto& v = star.loops[0].vertices;
+                const std::size_t n = v.size();
+                for (std::size_t k = 0; k < n; ++k) {
+                    const std::size_t i = (n - k) % n;
+                    hole.vertices.push_back({v[i].p, -v[(i + n - 1) % n].bulge});
+                }
+            }
+            region.loops.push_back(hole);
+            if (!prepare(region)) region.loops.pop_back();
+        }
+        if (region.loops.size() > 1) return region;
+    }
+}
+
 // [EV-12] Two runs processed the same events in the same order: the same vertices and edges in
 // the same order, bit for bit.
 inline std::string identical_mat(const MedialAxis& a, const MedialAxis& b)

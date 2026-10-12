@@ -179,9 +179,11 @@ Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& opti
 
 // [ALG-06] The inward offset of the region at the given distance (caller units, >= 0): the front
 // of the grassfire at that time, as loops of lines and arcs with the material on their left
-// (counter-clockwise around material, clockwise around a hole), component by component. Empty
-// once the distance passes the largest inscribed radius.
-Result<std::vector<Loop>> inward_offset(const Region& region, double distance, const Options& options = {});
-Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double distance, const Options& options = {});
+// (counter-clockwise around material, clockwise around a hole). One list of loops per component, in
+// component order [OUT-11]; a component's list is empty once the distance passes its largest
+// inscribed radius.
+Result<std::vector<std::vector<Loop>>> inward_offset(const Region& region, double distance, const Options& options = {});
+Result<std::vector<std::vector<Loop>>> inward_offset(const PreparedRegion& region, double distance,
+                                                     const Options& options = {});
 
 } // namespace wfmat

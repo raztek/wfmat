@@ -1,9 +1,9 @@
 # wfmat API
 
-wfmat computes the interior medial axis transform (MAT) of a planar region bounded by one closed loop
-of line segments and circular arcs, by simulating the inward grassfire front. This page documents the
-public C++ API of version 1.0. The design and the requirement IDs cited below are in
-[`spec.md`](spec.md).
+wfmat computes the interior medial axis transform (MAT) of a planar region bounded by closed loops
+of line segments and circular arcs (an outline with holes, and islands inside the holes), by
+simulating the inward grassfire front. This page documents the public C++ API of version 2.0. The
+design and the requirement IDs cited below are in [`spec.md`](spec.md).
 
 - [Using the library](#using-the-library)
 - [Input: regions in bulge form](#input-regions-in-bulge-form)
@@ -22,7 +22,7 @@ wfmat is a C++20 CMake project. Add it as a subdirectory, or fetch it, and link 
 
 ```cmake
 include(FetchContent)
-FetchContent_Declare(wfmat GIT_REPOSITORY https://github.com/raztek/wfmat.git GIT_TAG v1.0.0)
+FetchContent_Declare(wfmat GIT_REPOSITORY https://github.com/raztek/wfmat.git GIT_TAG v2.0.0)
 FetchContent_MakeAvailable(wfmat)
 target_link_libraries(app PRIVATE wfmat::wfmat)       # the algorithm
 target_link_libraries(app PRIVATE wfmat::io)          # JSON and SVG (needs nlohmann/json)
@@ -169,16 +169,19 @@ radius is not polynomial in the Bézier parameter; evaluate it with `radius_at` 
 ## Inward offsets
 
 ```cpp
-Result<std::vector<Loop>> inward_offset(const Region& region, double distance, const Options& options = {});
-Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double distance, const Options& options = {});
+Result<std::vector<std::vector<Loop>>> inward_offset(const Region& region, double distance,
+                                                     const Options& options = {});
+Result<std::vector<std::vector<Loop>>> inward_offset(const PreparedRegion& region, double distance,
+                                                     const Options& options = {});
 ```
 
 The inward offset at `distance` is the grassfire front at that time [ALG-06]: lines stay lines and
 arcs stay arcs, so the result is exact, in the same bulge form as the input, with the material on
-the left: counter-clockwise around material, clockwise around a hole, component after component
-(grouping by component comes in M4.3). A narrow neck splits the offset into several loops; at `distance = 0` it is the boundary, and past
-the largest inscribed radius the list is empty. A negative or non-finite distance is an
-`invalid_input` error.
+the left: counter-clockwise around material, clockwise around a hole. The result has one list of
+loops per component, in component order. A narrow neck splits a component's offset into several
+loops, and the front around a hole merges with the hole's front once they meet; at `distance = 0`
+the lists are the boundary loops, and past a component's largest inscribed radius its list is
+empty. A negative or non-finite distance is an `invalid_input` error.
 
 ## Errors
 
@@ -234,9 +237,11 @@ numbered `outer` first. `io::write_region_json` always writes `"loops"`.
 `io::read_region_json(path)` and `io::parse_region_json(text)` read it; `io::write_region_json`
 writes it back bit for bit.
 
-`io::write_mat_json(mat, offsets, {units, chord_tol})` writes the MAT [OUT-06]: the sites, the
-vertices with their contacts, the edges with their conic kind, radii and Bézier arcs (and a
-polyline each when `chord_tol > 0`), any inward offsets as bulge loops, and the run statistics. The
+`io::write_mat_json(mat, offsets, {units, chord_tol})` writes the MAT [OUT-06]: the components with
+their loops and vertex and edge ranges, the sites with their input loop and segment, the vertices
+with their component and contacts, the edges with their component, conic kind, radii and Bézier
+arcs (and a polyline each when `chord_tol > 0`), any inward offsets as bulge loops grouped by
+component, and the run statistics. The
 layout is spelled out in `wfmat/io/json.hpp`.
 
 `io::SvgWriter` draws for inspection, in your units with y up: `boundary`, `joins`, `medial_axis`
@@ -253,3 +258,17 @@ wfmat-cli --version
 
 It validates the region, reports its joins and the MAT's size and event counts, and writes the JSON
 and SVG outputs above. `--offset` may be repeated; distances and tolerances are in the input's units.
+
+## Changes from 1.x
+
+Version 2.0 adds holes and islands and changes the API in four places:
+
+- `Region` holds `loops` instead of `outer`: `Region{{loop}}` is a v1 region.
+- A loop's direction is checked rather than fixed: a clockwise outer loop, which 1.x reversed, is
+  now an `invalid_input` error (IN-08). Reverse it yourself, or list it at the right depth.
+- Vertices, edges and sites name their component or loop, and `MedialAxis::components()` lists the
+  components. A region without holes gives one component and a tree, as before.
+- `inward_offset` returns one list of loops per component.
+
+The JSON reader still accepts the v1 `"outer"` form; the MAT JSON gains `components`, a `loop` on
+each site, a `component` on each vertex and edge, and offsets grouped by component.

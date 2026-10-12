@@ -186,20 +186,20 @@ TEST_CASE("Inward offsets of the canonical shapes", "[M7][ALG-06]")
     SECTION("rectangle: a smaller rectangle, then nothing")
     {
         const PreparedRegion prep = prepared(load("rectangle.json"));  // 100 x 40
-        auto loops = inward_offset(prep, 5.0);
+        auto loops = offset_loops(prep, 5.0);
         REQUIRE(loops);
         REQUIRE(loops->size() == 1);
         CHECK((*loops)[0].vertices.size() == 4);
         CHECK(loop_area((*loops)[0]) == Approx(90.0 * 30.0).epsilon(1e-12));
         CHECK(check_offset(prep, *loops, 5.0).empty());
-        auto none = inward_offset(prep, 25.0);
+        auto none = offset_loops(prep, 25.0);
         REQUIRE(none);
         CHECK(none->empty());
     }
     SECTION("disk: a concentric circle")
     {
         const PreparedRegion prep = prepared(load("disk.json"));  // radius 10
-        auto loops = inward_offset(prep, 4.0);
+        auto loops = offset_loops(prep, 4.0);
         REQUIRE(loops);
         REQUIRE(loops->size() == 1);
         CHECK(loop_area((*loops)[0]) == Approx(pi * 36.0).epsilon(1e-12));
@@ -208,7 +208,7 @@ TEST_CASE("Inward offsets of the canonical shapes", "[M7][ALG-06]")
     SECTION("L-shape: an arc about the reflex corner")
     {
         const PreparedRegion prep = prepared(load("l-shape.json"));
-        auto loops = inward_offset(prep, 5.0);
+        auto loops = offset_loops(prep, 5.0);
         REQUIRE(loops);
         REQUIRE(loops->size() == 1);
         int arcs = 0;
@@ -219,7 +219,7 @@ TEST_CASE("Inward offsets of the canonical shapes", "[M7][ALG-06]")
     SECTION("slot: a smaller slot")
     {
         const PreparedRegion prep = prepared(load("slot.json"));  // 60 between centres, radius 10
-        auto loops = inward_offset(prep, 5.0);
+        auto loops = offset_loops(prep, 5.0);
         REQUIRE(loops);
         REQUIRE(loops->size() == 1);
         CHECK(loop_area((*loops)[0]) == Approx(60.0 * 10.0 + pi * 25.0).epsilon(1e-12));
@@ -228,11 +228,11 @@ TEST_CASE("Inward offsets of the canonical shapes", "[M7][ALG-06]")
     SECTION("distance zero is the boundary; a negative distance is refused")
     {
         const PreparedRegion prep = prepared(load("l-shape.json"));
-        auto loops = inward_offset(prep, 0.0);
+        auto loops = offset_loops(prep, 0.0);
         REQUIRE(loops);
         REQUIRE(loops->size() == 1);
         CHECK(loop_area((*loops)[0]) == Approx(2000.0).epsilon(1e-12));
-        auto bad = inward_offset(prep, -1.0);
+        auto bad = offset_loops(prep, -1.0);
         REQUIRE_FALSE(bad);
         CHECK(bad.error().requirement == "ALG-06");
     }
@@ -244,7 +244,7 @@ TEST_CASE("Inward offsets split a region into several loops", "[M7][ALG-06]")
     const Region region = polygon(
         {{0, 0}, {40, 0}, {40, 15}, {60, 15}, {60, 0}, {100, 0}, {100, 40}, {60, 40}, {60, 25}, {40, 25}, {40, 40}, {0, 40}});
     const PreparedRegion prep = prepared(region);
-    auto loops = inward_offset(prep, 8.0);
+    auto loops = offset_loops(prep, 8.0);
     REQUIRE(loops);
     CHECK(loops->size() == 2);
     CHECK(check_offset(prep, *loops, 8.0).empty());
@@ -267,7 +267,7 @@ TEST_CASE("Inward offsets of random shapes", "[M7][ALG-06][VER-05]")
         double rmax = 0.0;
         for (const MatVertex& v : mat->vertices()) rmax = std::max(rmax, v.r);
         const double d = fraction(rng) * rmax;
-        auto loops = inward_offset(*prep, d);
+        auto loops = offset_loops(*prep, d);
         REQUIRE(loops);
         INFO("shape " << k << " at " << d << " of " << rmax);
         CHECK_FALSE(loops->empty());
@@ -282,9 +282,9 @@ TEST_CASE("The MAT and its offsets as JSON and SVG", "[M7][OUT-06]")
     const PreparedRegion prep = prepared(load("spec-example.json"));
     auto mat = compute_mat(prep);
     REQUIRE(mat);
-    auto loops = inward_offset(prep, 3.0);
+    auto loops = offset_loops(prep, 3.0);
     REQUIRE(loops);
-    const std::vector<io::OffsetLoops> offsets{{3.0, *loops}};
+    const std::vector<io::OffsetLoops> offsets{{3.0, {*loops}}};
     const auto doc = nlohmann::json::parse(io::write_mat_json(*mat, offsets, {"mm", 0.5}));
     CHECK(doc["units"] == "mm");
     REQUIRE(doc["vertices"].size() == mat->vertices().size());
@@ -297,7 +297,10 @@ TEST_CASE("The MAT and its offsets as JSON and SVG", "[M7][OUT-06]")
         CHECK(e["r0"].get<double>() == mat->edges()[i].r0());
     }
     REQUIRE(doc["offsets"].size() == 1);
-    CHECK(doc["offsets"][0]["loops"].size() == loops->size());
+    REQUIRE(doc["offsets"][0]["components"].size() == 1);
+    CHECK(doc["offsets"][0]["components"][0].size() == loops->size());
+    REQUIRE(doc["components"].size() == 1);
+    CHECK(doc["components"][0]["edges"][1] == mat->edges().size());
     CHECK(doc["stats"]["clusters"].get<std::size_t>() == mat->stats().clusters);
     CHECK(nlohmann::json::parse(io::write_mat_json(*mat)).contains("offsets") == false);
 

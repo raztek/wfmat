@@ -110,9 +110,9 @@ int main(int argc, char** argv)
     if (mat) {
         const auto& st = mat->stats();
         std::printf("MAT: %zu vertices, %zu edges; events: %zu collapses, %zu transitions, %zu curvature ends, "
-                    "%zu splits, %zu contacts, %zu clusters, %zu loops vanished\n",
+                    "%zu splits, %zu contacts, %zu merges, %zu clusters, %zu loops vanished\n",
                     mat->vertices().size(), mat->edges().size(), st.collapses, st.transitions, st.curvature_ends,
-                    st.splits, st.contacts, st.clusters, st.annihilations);
+                    st.splits, st.contacts, st.merges, st.clusters, st.annihilations);
     } else if (mat.error().code == wfmat::ErrorCode::unsupported) {
         std::printf("MAT: not computed yet: %s\n", wfmat::to_string(mat.error()).c_str());
     } else {
@@ -122,13 +122,15 @@ int main(int argc, char** argv)
 
     std::vector<wfmat::io::OffsetLoops> offsets;
     for (double d : distances) {
-        auto loops = wfmat::inward_offset(*region, d);
-        if (!loops) {
-            std::cerr << input << ": offset " << d << ": " << wfmat::to_string(loops.error()) << "\n";
+        auto comps = wfmat::inward_offset(*region, d);
+        if (!comps) {
+            std::cerr << input << ": offset " << d << ": " << wfmat::to_string(comps.error()) << "\n";
             return 1;
         }
-        std::printf("offset %g: %zu loop%s\n", d, loops->size(), loops->size() == 1 ? "" : "s");
-        offsets.push_back({d, std::move(*loops)});
+        std::size_t n = 0;
+        for (const auto& c : *comps) n += c.size();
+        std::printf("offset %g: %zu loop%s\n", d, n, n == 1 ? "" : "s");
+        offsets.push_back({d, std::move(*comps)});
     }
 
     if (!json_path.empty()) {
@@ -141,7 +143,8 @@ int main(int argc, char** argv)
     if (!svg_path.empty()) {
         wfmat::io::SvgWriter w(wfmat::io::caller_bbox(*region));
         w.boundary(*region);
-        for (const auto& o : offsets) w.loops(o.loops);
+        for (const auto& o : offsets)
+            for (const auto& c : o.components) w.loops(c);
         if (mat) w.medial_axis(*mat);
         w.joins(*region);
         if (!write_file(svg_path, w.str())) return 1;
