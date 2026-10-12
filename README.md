@@ -1,7 +1,8 @@
 # wfmat
 
 Wavefront (grassfire) computation of the interior medial axis transform of a planar region
-bounded by one closed loop of line segments and circular arcs.
+bounded by closed loops of line segments and circular arcs: an outline with holes, and islands
+inside the holes, nested up to 8 levels.
 
 The design and specification live in [`docs/spec.md`](docs/spec.md) (Markdown with LaTeX maths);
 this repository is the master copy. `bash docs/build-pdf.sh` rebuilds
@@ -42,6 +43,17 @@ Each approved spec version is tagged `spec-vX.Y`. The public API is documented i
   flattened to a chord tolerance, inward offsets from the front at any distance, MAT JSON output,
   an SVG with the axis coloured by radius and the offsets, CLI options for all of these, and the
   API documentation. Merging a project version of 1.0.0 or later tags `vX.Y.Z`.
+
+Version 2 (holes) is in progress, specified in spec 2.x:
+
+- M4.1 (input): a region is a list of disjoint loops, at most 8 levels deep, counter-clockwise
+  at even depth and clockwise at odd depth (checked, never reversed). Each outer loop with the
+  holes directly inside it is a component. JSON takes `loops`, or v1's `outer` with `holes`.
+- M4.2 (engine): one run per component; a hole front merges with the front around it where they
+  meet, and pieces of a split never meet again; closed plateaus such as an annulus resolve as one
+  cluster. The axis of each component is connected with one cycle per hole, checked on annuli,
+  square and constant-width rings, disks with up to six holes, nested islands and a plate with
+  holes, against the sampled Voronoi oracle, the all-pairs broad phase and `resolve_all_events`.
 
 `ErrorCode::unsupported` is now only the code for valid input that a later milestone handles;
 no input currently gets it. See section 13 of the spec.

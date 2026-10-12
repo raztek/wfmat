@@ -111,7 +111,8 @@ struct BroadIndex;  // the R-tree of the windowed broad phase, in engine.cpp
 
 class Engine {
 public:
-    Engine(const PreparedRegion& region, const Options& options);
+    // [ALG-07] The engine of one component of the region: its outer loop and its holes.
+    Engine(const PreparedRegion& region, const Options& options, std::uint32_t component = 0);
     ~Engine();
 
     // Runs to the end, or, with a finite stop, through every event up to that time [ALG-06].
@@ -141,6 +142,7 @@ public:
 
 private:
     Result<void> initialise();
+    Result<void> initialise_loop(std::uint32_t input_loop, std::uint32_t id);
     Result<void> finish() const;
 
     // Front navigation and geometry.
@@ -153,7 +155,7 @@ private:
     std::size_t loop_size(std::uint32_t element, std::size_t limit) const;
 
     // Construction.
-    SiteId add_site(const Site& s, std::uint32_t segment, bool corner);
+    SiteId add_site(const Site& s, std::uint32_t loop, std::uint32_t segment, bool corner);
     std::uint32_t add_element(SiteId site, std::uint32_t loop);
     std::uint32_t add_mat_vertex(Vec2 p, double t, VertexKind kind, const std::vector<std::uint32_t>& elements);
     std::uint32_t add_mat_vertex_at_sites(Vec2 p, double t, VertexKind kind, const std::vector<SiteId>& contacts);
@@ -161,6 +163,16 @@ private:
                                     std::optional<Vec2> direction = std::nullopt);
     void close_edge(std::uint32_t vertex, std::uint32_t mat_vertex, Vec2 p, double t);
     void relabel_loops(const std::vector<std::uint32_t>& starts);
+    void relabel_every_loop(const std::vector<std::uint32_t>& starts);
+    void merge_loops(std::uint32_t x, std::uint32_t y);
+
+    // [EV-09] Faces of the unswept region. Two loops can meet only when they bound the same face:
+    // pieces of a split never meet again, while a hole front and the front around it do.
+    std::uint32_t face_of(std::uint32_t element) const { return face_[elements_[element].loop]; }
+    std::uint32_t new_loop_id(std::uint32_t old);
+    void settle_face(std::uint32_t face, std::uint32_t first_new);
+    void reface(std::uint32_t face);
+    std::vector<Segment> front_segments(std::uint32_t element, double t) const;
 
     // [EV-11] The windowed broad phase; with all_pairs [EV-12], every element of the loop is a
     // candidate and the window is unbounded.
@@ -197,6 +209,7 @@ private:
     Result<void> check_invariants() const;
 
     const PreparedRegion& region_;
+    std::uint32_t component_ = 0;
     Tolerances tol_;
     bool debug_ = false;
     bool resolve_all_ = false;
@@ -221,6 +234,12 @@ private:
     std::size_t window_pairs_ = 0;      // candidate pairs found when the window opened
     std::size_t window_events_ = 0;     // events handled in the window
     std::vector<std::uint32_t> near_;   // scratch for near_elements
+
+    // Faces [EV-09]: the face of each loop id, and the number of live loops of each face.
+    std::vector<std::uint32_t> face_;
+    std::vector<std::uint32_t> face_loops_;
+    std::vector<Vec2> resolved_;  // contact points resolved at resolved_t_
+    double resolved_t_ = -1.0;
 
     // relabel_loops: per-element marks, valid for the current epoch only.
     std::vector<std::uint64_t> mark_;

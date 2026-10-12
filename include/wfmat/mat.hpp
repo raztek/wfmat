@@ -31,9 +31,10 @@ enum class VertexKind { corner, curvature_end, junction, transition, extremum_mi
 // [OUT-03] A site in caller units and the boundary piece it comes from.
 struct MatSite {
     Site geometry;
-    std::uint32_t segment = 0;  // input segment index; a corner point names the segment ending
-                                // at the corner in counter-clockwise order
+    std::uint32_t segment = 0;  // input segment index within its loop; a corner point names the
+                                // segment ending at the corner in loop order
     bool corner = false;        // a point site at a reflex corner
+    std::uint32_t loop = 0;     // input loop index
 };
 
 // A contact of the inscribed disk at a vertex: the site and the foot point on it.
@@ -48,7 +49,18 @@ struct MatVertex {
     double r = 0.0;
     VertexKind kind = VertexKind::junction;
     std::vector<MatContact> contacts;
-    std::vector<EdgeId> edges;  // counter-clockwise around p
+    std::vector<EdgeId> edges;  // counter-clockwise around p; a closed edge appears twice
+    std::uint32_t component = 0;  // [OUT-11]
+};
+
+// [OUT-11] A component of the region and the part of the axis inside it: vertices
+// [first_vertex, first_vertex + vertex_count) and edges [first_edge, first_edge + edge_count).
+// The axis of a component is connected, with one independent cycle per hole [OUT-08].
+struct MatComponent {
+    std::uint32_t outer = 0;            // input loop indices
+    std::vector<std::uint32_t> holes;
+    VertexId first_vertex = 0, vertex_count = 0;
+    EdgeId first_edge = 0, edge_count = 0;
 };
 
 // [OUT-05] A rational quadratic Bezier arc, (1-s)^2 p0 + 2 s (1-s) w p1 + s^2 p2 over
@@ -81,6 +93,7 @@ public:
         double t0 = 0.0, t1 = 0.0;   // radius interval
         Vec2 p0, p1;                 // end points
         Transform xf;
+        std::uint32_t component = 0;
     };
 
     MatEdge() = default;
@@ -90,6 +103,7 @@ public:
     VertexId v1() const { return d_.v1; }
     SiteId left() const { return d_.left; }
     SiteId right() const { return d_.right; }
+    std::uint32_t component() const { return d_.component; }
     ConicKind kind() const { return d_.kind; }
     double r0() const { return d_.xf.length_from_unit(d_.t0); }
     double r1() const { return d_.xf.length_from_unit(d_.t1); }
@@ -125,6 +139,7 @@ struct RunStats {
     std::size_t splits = 0;             // E2 [EV-04]
     std::size_t contacts = 0;           // E3 [EV-05]
     std::size_t annihilations = 0;      // loops that vanished [EV-08]
+    std::size_t merges = 0;             // two loops joined by a split or contact [EV-09]
     std::size_t clusters = 0;           // resolved clusters [RB-03]
     std::size_t stale_events = 0;       // discarded at pop time or by heap compaction [EV-10]
     std::size_t windows = 0;            // broad-phase windows opened [EV-11]
@@ -135,15 +150,16 @@ class MedialAxis {
 public:
     MedialAxis() = default;
     MedialAxis(std::vector<MatVertex> vertices, std::vector<MatEdge> edges, std::vector<MatSite> sites,
-               RunStats stats, Transform xf)
-        : vertices_(std::move(vertices)), edges_(std::move(edges)), sites_(std::move(sites)), stats_(stats),
-          xf_(xf)
+               std::vector<MatComponent> components, RunStats stats, Transform xf)
+        : vertices_(std::move(vertices)), edges_(std::move(edges)), sites_(std::move(sites)),
+          components_(std::move(components)), stats_(stats), xf_(xf)
     {
     }
 
     std::span<const MatVertex> vertices() const { return vertices_; }
     std::span<const MatEdge> edges() const { return edges_; }
     std::span<const MatSite> sites() const { return sites_; }
+    std::span<const MatComponent> components() const { return components_; }
     const RunStats& stats() const { return stats_; }
     const Transform& transform() const { return xf_; }
 
@@ -151,18 +167,20 @@ private:
     std::vector<MatVertex> vertices_;
     std::vector<MatEdge> edges_;
     std::vector<MatSite> sites_;
+    std::vector<MatComponent> components_;
     RunStats stats_;
     Transform xf_;
 };
 
 // [API-02] The interior MAT of a region bounded by lines and arcs (polygons since M2, arcs since
-// M3, simultaneous events and plateaus since M5).
+// M3, simultaneous events and plateaus since M5, holes and islands since M4.2).
 Result<MedialAxis> compute_mat(const Region& region, const Options& options = {});
 Result<MedialAxis> compute_mat(const PreparedRegion& region, const Options& options = {});
 
 // [ALG-06] The inward offset of the region at the given distance (caller units, >= 0): the front
-// of the grassfire at that time, as counter-clockwise loops of lines and arcs. Empty once the
-// distance passes the largest inscribed radius.
+// of the grassfire at that time, as loops of lines and arcs with the material on their left
+// (counter-clockwise around material, clockwise around a hole), component by component. Empty
+// once the distance passes the largest inscribed radius.
 Result<std::vector<Loop>> inward_offset(const Region& region, double distance, const Options& options = {});
 Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double distance, const Options& options = {});
 

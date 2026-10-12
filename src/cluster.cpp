@@ -171,40 +171,48 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         return make_error(ErrorCode::numerical_failure, "RB-03", what + " near " + point_text(first.p, t), 0);
     };
 
-    const std::uint32_t loop = elements_[start].loop;
-    const Event* plateau = nullptr;
-    for (const Event& e : cluster) {
-        for (std::uint32_t x : e.elements)
-            if (x != no_id && elements_[x].loop != loop) return failure("a cluster on two front loops");
-        if (e.kind != EventKind::plateau) continue;
-        if (plateau) return failure("a cluster with two plateaus");
-        plateau = &e;
-    }
+    // The cluster may span several loops of the component (a hole front meeting the front around
+    // it) and several plateaus (a closed chain of them around a hole [RB-07]).
+    std::vector<const Event*> plateaus;
+    for (const Event& e : cluster)
+        if (e.kind == EventKind::plateau) plateaus.push_back(&e);
+    const bool plateau = !plateaus.empty();
+    const double rho = cluster_radius();
 
     // 1. Anchors and the region.
     struct Anchor {
         Vec2 p;
         double cut = 0.0;  // plateau: the angle towards the other end; sorting starts there
         std::uint32_t mv = no_id;
-        int shocks_in = 0, links = 0;
+        int shocks_in = 0, links = 0, plateau_edges = 0;
         std::vector<SiteId> contacts;
     };
     std::vector<Anchor> anchors;
+    // Plateau ends that meet (a chain of plateaus) share one anchor.
     auto add_anchor = [&](Vec2 p, double cut) {
+        for (int k = 0; k < static_cast<int>(anchors.size()); ++k)
+            if (dist(anchors[k].p, p) <= rho) return k;
         Anchor a;
         a.p = p;
         a.cut = cut;
         anchors.push_back(a);
+        return static_cast<int>(anchors.size()) - 1;
     };
     std::vector<Vec2> points;
-    std::uint32_t px = no_id, py = no_id;
+    struct PlateauEnds {
+        int p, q;  // anchors of the start and the end, along the front of elements[0]
+    };
+    std::vector<PlateauEnds> ends;
     if (plateau) {
-        px = plateau->elements[0];
-        py = plateau->elements[1];
-        const Site& s = site(px);
-        auto tangent = [&](Vec2 q) { const Vec2 g = s.gradient(q); return Vec2{g.y, -g.x}; };
-        add_anchor(plateau->p, angle_of(tangent(plateau->p)));
-        add_anchor(plateau->q, angle_of(-tangent(plateau->q)));
+        for (const Event* pl : plateaus) {
+            const Site& s = site(pl->elements[0]);
+            auto tangent = [&](Vec2 q) { const Vec2 g = s.gradient(q); return Vec2{g.y, -g.x}; };
+            const int ap = add_anchor(pl->p, angle_of(tangent(pl->p)));
+            const int aq = add_anchor(pl->q, angle_of(-tangent(pl->q)));
+            ends.push_back({ap, aq});
+            ++anchors[ap].plateau_edges;
+            ++anchors[aq].plateau_edges;
+        }
     } else {
         Vec2 sum;
         for (const Event& e : cluster) sum = sum + e.p;
@@ -221,7 +229,6 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
     for (const Anchor& a : anchors) points.push_back(a.p);
 
-    const double rho = cluster_radius();
     // How far the points of a point cluster are from its anchor; a plateau's anchors are its ends.
     double spread = rho;
     if (!plateau)
@@ -229,7 +236,7 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     auto gap = [&](Vec2 x) {
         double d = std::numeric_limits<double>::infinity();
         for (Vec2 q : points) d = std::min(d, dist(x, q));
-        if (plateau) d = std::min(d, plateau_distance(*plateau, x));
+        for (const Event* pl : plateaus) d = std::min(d, plateau_distance(*pl, x));
         return d;
     };
     auto nearest = [&](Vec2 x) {
@@ -243,10 +250,13 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     // see them in the same sequence, and their vertices.
     Box reach;
     for (Vec2 q : points) reach.add(q);
-    if (plateau) {
-        reach.add(element_box(px, t));
-        reach.add(element_box(py, t));
-    }
+    // The plateau elements, and the plateaus each lies on.
+    std::map<std::uint32_t, std::vector<std::size_t>> on_plateau;
+    for (std::size_t k = 0; k < plateaus.size(); ++k)
+        for (std::uint32_t x : plateaus[k]->elements) {
+            on_plateau[x].push_back(k);
+            reach.add(element_box(x, t));
+        }
     reach = reach.inflated(std::max(rho, tangency_radius));
     std::vector<std::uint32_t> elems;
     near_elements(reach, start, elems);
@@ -327,12 +337,19 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         const std::uint32_t e = elems[i];
         const std::size_t ip = vindex.at(elements_[e].prev), in = vindex.at(elements_[e].next);
         const bool lp = dying[ip], ln = dying[in];
-        if (e == px || e == py) {
-            // A plateau element runs along the plateau from one anchor to the other.
-            const int enter = e == px ? 0 : 1, leave = 1 - enter;
+        if (const auto it = on_plateau.find(e); it != on_plateau.end()) {
+            // A plateau element runs along its plateau from one anchor to the other. One whose
+            // vertices both die lies on the plateau, or on a chain of them, and dies with it.
             touched[i] = 1;
-            contact(0, e);
-            contact(1, e);
+            for (std::size_t k : it->second) {
+                contact(ends[k].p, e);
+                contact(ends[k].q, e);
+            }
+            if (lp && ln) continue;
+            if (it->second.size() > 1) return failure("a front element on two plateaus that survives them");
+            const std::size_t k = it->second.front();
+            const bool x = plateaus[k]->elements[0] == e;
+            const int enter = x ? ends[k].p : ends[k].q, leave = x ? ends[k].q : ends[k].p;
             if (!lp) pieces.push_back({e, -1, enter});
             if (!ln) pieces.push_back({e, leave, -1});
             continue;
@@ -401,8 +418,12 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         }
         ports.push_back({id, in, k, angle_of(u), lateral, slack, 0.0});
     };
+    // The loops the cluster touches: when it joins pieces of several, every resulting loop is
+    // relabelled in full [EV-09].
+    std::set<std::uint32_t> loops_touched;
     for (std::size_t i = 0; i < m; ++i) {
         if (!touched[i]) continue;
+        loops_touched.insert(elements_[elems[i]].loop);
         elements_[elems[i]].alive = false;
         ++elements_[elems[i]].version;
     }
@@ -460,12 +481,17 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         i = j;
     }
 
-    // Pair each in-port with the out-port before it.
+    // Pair each in-port with the out-port before it at the same anchor; around a point anchor the
+    // order is cyclic, at a plateau end it starts at the plateau.
     const std::size_t np = ports.size();
     std::vector<std::pair<std::size_t, std::size_t>> links;
     for (std::size_t i = 0; i < np; ++i) {
         if (!ports[i].in) continue;
-        const std::size_t j = (i + np - 1) % np;
+        std::size_t j = (i + np - 1) % np;
+        if (ports[j].anchor != ports[i].anchor && anchors[ports[i].anchor].plateau_edges == 0) {
+            j = i;
+            while (j + 1 < np && ports[j + 1].anchor == ports[i].anchor) ++j;  // the last of its group
+        }
         if (ports[j].in || ports[j].anchor != ports[i].anchor) return failure("front ports that do not alternate");
         if (elements_[ports[i].element].site == elements_[ports[j].element].site)
             return failure("a front element relinked to itself");
@@ -474,15 +500,19 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
     if (2 * links.size() != np) return failure("unpaired front ports");
     if (np == 0)
-        for (std::uint32_t x = start;;) {
-            if (elements_[x].alive) return failure("a vanishing loop with surviving elements");
-            x = next_element(x);
-            if (x == start) break;
-        }
+        for (const Event& e : cluster)
+            for (std::uint32_t s0 : e.elements) {
+                if (s0 == no_id) continue;
+                for (std::uint32_t x = s0;;) {
+                    if (elements_[x].alive) return failure("a vanishing loop with surviving elements");
+                    x = next_element(x);
+                    if (x == s0) break;
+                }
+            }
 
     // 4. Emit the MAT vertices, close the dying shocks, add the plateau edge and the new shocks.
     for (Anchor& a : anchors) {
-        const int degree = a.shocks_in + a.links + (plateau ? 1 : 0);
+        const int degree = a.shocks_in + a.links + a.plateau_edges;
         VertexKind kind = VertexKind::curvature_end;
         if (degree >= 3)
             kind = VertexKind::junction;
@@ -503,11 +533,12 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         close_edge(verts[i], anchors[vanchor[i]].mv, anchors[vanchor[i]].p, t);
         vertices_[verts[i]].alive = false;
     }
-    if (plateau) {
+    for (std::size_t k = 0; k < plateaus.size(); ++k) {
+        const std::uint32_t px = plateaus[k]->elements[0], py = plateaus[k]->elements[1];
         const Site &sx = site(px), &sy = site(py);
         MatEdge::Data d;
-        d.v0 = anchors[0].mv;
-        d.v1 = anchors[1].mv;
+        d.v0 = anchors[ends[k].p].mv;
+        d.v1 = anchors[ends[k].q].mv;
         // Along the plateau, in the direction of the front of x, x lies on the right.
         d.left = elements_[py].site;
         d.right = elements_[px].site;
@@ -516,8 +547,8 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
         d.a = sy;
         d.b = sx;
         d.t0 = d.t1 = t;
-        d.p0 = anchors[0].p;
-        d.p1 = anchors[1].p;
+        d.p0 = anchors[ends[k].p].p;
+        d.p1 = anchors[ends[k].q].p;
         d.xf = region_.xf;
         mat_edges.push_back(d);
     }
@@ -537,7 +568,16 @@ Result<void> Engine::resolve_cluster(const std::vector<Event>& cluster)
     }
     std::vector<std::uint32_t> starts;
     for (std::uint32_t v : born) starts.push_back(vertices_[v].left);
-    relabel_loops(starts);
+    const std::uint32_t face = loops_touched.empty() ? 0 : face_[*loops_touched.begin()];
+    const std::uint32_t first_new = next_loop_;
+    if (loops_touched.size() > 1) {
+        relabel_every_loop(starts);
+        stats.merges += loops_touched.size() - 1;
+        face_loops_[face] -= static_cast<std::uint32_t>(loops_touched.size() - 1);
+    } else {
+        relabel_loops(starts);
+    }
+    if (!loops_touched.empty()) settle_face(face, first_new);
 
     ++stats.clusters;
     if (np == 0) ++stats.annihilations;

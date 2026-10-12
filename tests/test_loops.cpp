@@ -249,18 +249,6 @@ TEST_CASE("loops are checked one by one", "[IN-03][IN-04][IN-01]")
     CHECK(prepare(Region{}).error().requirement == "IN-12");
 }
 
-TEST_CASE("the axis of a region with holes waits for M4.2", "[API-03]")
-{
-    const Region r = load("square-ring.json");
-    auto mat = compute_mat(r);
-    REQUIRE_FALSE(mat);
-    CHECK(mat.error().code == ErrorCode::unsupported);
-    CHECK(mat.error().requirement == "M4.2");
-    auto offset = inward_offset(r, 5.0);
-    REQUIRE_FALSE(offset);
-    CHECK(offset.error().code == ErrorCode::unsupported);
-}
-
 TEST_CASE("written documents with several loops read back bit for bit", "[IN-02]")
 {
     const io::RegionDocument doc{load("plate-with-holes.json"), "mm"};

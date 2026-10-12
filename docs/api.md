@@ -55,9 +55,8 @@ depth is the number of loops around it, at most 7 (8 levels) [IN-13]. Its direct
 input: loops at even depth run counter-clockwise and loops at odd depth clockwise, so the material
 is always on the left; a loop running the other way is rejected, never reversed [IN-08]. Each loop
 at even depth, with the loops directly inside it as its holes, is one component of the region; a
-loop inside a hole is an island, the outer loop of another component. Since 2.0 (M4.1) such regions
-load and validate; `compute_mat` and `inward_offset` answer `unsupported` for more than one loop
-until milestone M4.2.
+loop inside a hole is an island, the outer loop of another component. Each component is computed
+on its own (M4.2).
 
 `loop_from_segments` builds a loop from explicit `LineSpec{a, b}` and
 `ArcSpec{centre, radius, start_angle, sweep}` pieces, checking that consecutive pieces meet to
@@ -86,18 +85,24 @@ or reflex, and the transform `xf` to and from your units.
 ```cpp
 struct MatVertex { Vec2 p; double r; VertexKind kind;
                    std::vector<MatContact> contacts;  // site and foot point of each contact
-                   std::vector<EdgeId> edges; };      // counter-clockwise around p
+                   std::vector<EdgeId> edges;         // counter-clockwise around p
+                   std::uint32_t component; };
+
+struct MatComponent { std::uint32_t outer; std::vector<std::uint32_t> holes;  // input loop indices
+                      VertexId first_vertex, vertex_count; EdgeId first_edge, edge_count; };
 
 class MedialAxis {
-    std::span<const MatVertex> vertices() const;
-    std::span<const MatEdge>   edges() const;
-    std::span<const MatSite>   sites() const;
-    const RunStats&            stats() const;
+    std::span<const MatVertex>    vertices() const;
+    std::span<const MatEdge>      edges() const;
+    std::span<const MatSite>      sites() const;
+    std::span<const MatComponent> components() const;
+    const RunStats&               stats() const;
 };
 ```
 
-The MAT is a tree embedded in the region [OUT-08]. Each vertex has its position, the radius of
-its inscribed disk and its kind:
+The MAT is a graph embedded in the region, stored component by component [OUT-11]. The axis of
+each component is connected, with one cycle around each of its holes, so a component without holes
+gives a tree [OUT-08]. Each vertex has its position, the radius of its inscribed disk and its kind:
 
 | Kind | Degree | Where |
 | --- | --- | --- |
@@ -110,10 +115,11 @@ its inscribed disk and its kind:
 
 A site is a boundary piece seen as a source of distance: a line, an arc, or the point of a reflex
 corner. `MatSite::geometry` holds it in your units, with the signed distance
-`Site::distance(x)`; `segment` is the input segment it comes from, and `corner` marks a reflex
-corner point. Each edge names its left and right sites, seen along its direction of travel.
+`Site::distance(x)`; `loop` and `segment` are the input loop and segment it comes from, and
+`corner` marks a reflex corner point. Each edge names its left and right sites, seen along its direction of travel.
 
-`RunStats` counts the events by type, the clusters of simultaneous events resolved, and the largest
+`RunStats` counts the events by type, the loop merges between a hole front and the front around
+it, the clusters of simultaneous events resolved, and the largest
 distance residual at an event point.
 
 ## Edge geometry
@@ -122,6 +128,7 @@ distance residual at an event point.
 class MatEdge {
     VertexId v0() const, v1() const;        // birth and death vertex
     SiteId left() const, right() const;
+    std::uint32_t component() const;
     ConicKind kind() const;                 // line, parabola, ellipse, hyperbola,
                                             // plateau_line, plateau_arc
     double r0() const, r1() const;          // r0 <= r1
@@ -167,8 +174,9 @@ Result<std::vector<Loop>> inward_offset(const PreparedRegion& region, double dis
 ```
 
 The inward offset at `distance` is the grassfire front at that time [ALG-06]: lines stay lines and
-arcs stay arcs, so the result is exact, in the same bulge form as the input, counter-clockwise. A
-narrow neck splits the offset into several loops; at `distance = 0` it is the boundary, and past
+arcs stay arcs, so the result is exact, in the same bulge form as the input, with the material on
+the left: counter-clockwise around material, clockwise around a hole, component after component
+(grouping by component comes in M4.3). A narrow neck splits the offset into several loops; at `distance = 0` it is the boundary, and past
 the largest inscribed radius the list is empty. A negative or non-finite distance is an
 `invalid_input` error.
 
@@ -190,8 +198,8 @@ std::string to_string(const Error&);           // "IN-04: loop 0, segment 3: ...
 `invalid_input` means the region breaks the input contract (not simple, a segment too short, a
 cusp, crossing loops, a loop running the wrong way). `numerical_failure` and `invariant_violation` mean the run could not be completed
 consistently; they are bugs or inputs at the edge of double precision, and worth reporting with the
-input. `unsupported` is reserved for valid input that a later version handles: in M4.1, any
-region of more than one loop, with the milestone that handles it (M4.2) in `requirement`.
+input. `unsupported` is reserved for valid input that a later version handles. An error inside one
+component names it: "component 1: ...".
 
 ## Options and tolerances
 

@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 2.0 · 11 October 2026 · michael"
-version: "2.0"
+subtitle: "Version 2.1 · 12 October 2026 · michael"
+version: "2.1"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 2.1 | 2026-10-12 | minor revision | from the M4.2 engine: EV-09 decides split or merge by loop identity and limits meetings to loops bounding the same face of the unswept region (pieces of a split never meet again); EV-15: a resolved contact is not found again by its own pieces; RB-07: a concentric annulus needs no special vertex, since circles are two half arcs; API sketch: `MatComponent`, `component` last in `MatVertex` |
 | 2.0 | 2026-10-11 | approved baseline (v2) | approved by michael on 11 October 2026; holes: a region is any number of disjoint loops nested up to 8 levels, orientation alternating by level as an input rule (SC-01, IN-02, IN-05 withdrawn, IN-12 to IN-14, ALG-07); loop merges and closed plateaus (EV-09, EV-11, EV-14, RB-03, RB-07); the MAT of each component has one cycle per hole (OUT-08, OUT-11); API and JSON for several loops (API-02, OUT-06); relaxed verification scope (PF-03, VER-02 to VER-05); milestone M4 in three parts |
 | 1.5 | 2026-10-10 | minor revision | OUT-05, API-02: Bézier export as a list of arcs, each turning by less than a right angle, and the flattening rule; OUT-06: the MAT JSON layout; ALG-06, API-02: `inward_offset` as implemented in M7; API-03: CLI options; section 13: the PF-02 targets move from M6 to a new milestone, M8 |
 | 1.4 | 2026-10-09 | minor revision | EV-11, EV-12, RB-01: the windowed broad phase as implemented in M6 (window choice, split candidates, event identity in the queue order); PF-01: heap compaction rule; RB-03: tangent ports compared within the cluster's spread, fast shocks die if they pass through $D$ within $\varepsilon_t$; PF-02: times measured in M6; VER-07: benchmark families |
@@ -217,7 +218,8 @@ Three generic event types produce every MAT vertex: a local collapse, a non-loca
 - **[EV-06]** A new vertex between elements $X$ and $Y$ is a shock if $X$ and $Y$ meet at a corner, and regular if they meet tangentially (only possible when they are original $G^1$ neighbours).
 - **[EV-07]** Every shock that dies closes its MAT edge at the event vertex; every new shock opens one there.
 - **[EV-08]** A loop that drops to two elements both shrinking to one point, or to one element with no vertices (a circle reaching zero radius), is annihilated: its last vertex is an extremum (max of $r$) or a curvature end.
-- **[EV-09]** Split or merge. E2 and E3 join two points of the front. When both elements lie on one loop, the loop splits in two; when they lie on two loops, the two merge into one. Nothing else is possible, so the loop ids of the elements decide, with no geometric test. Every split adds a loop, every merge and every annihilation removes one, and a cluster [RB-03] counts by the loops it removes and creates; a component starts with $1 + h$ loops and ends with none. The cycles of the axis are not tied to particular merges; OUT-08 checks them on the output.
+- **[EV-09]** Split or merge. E2 and E3 join two points of the front. When both elements lie on one loop, the loop splits in two; when they lie on two loops, the two merge into one. The loop ids of the elements decide. Two loops can meet only when they bound the same face of the unswept region: the pieces of a split are separated by swept material and never meet again, while a hole front and the front around it do. Each loop therefore carries a face. A component starts as one face; a split in a face of one loop gives each piece a face of its own, and a split in a face with holes re-derives the faces from the fronts at $t^*$ (each counter-clockwise loop bounds a face, and each clockwise loop belongs to the one around it). Only events between elements of one face are scheduled and accepted [EV-13]. Every split adds a loop, every merge and every annihilation removes one, and a cluster [RB-03] counts by the loops it removes and creates; a component starts with $1 + h$ loops and ends with none. The cycles of the axis are not tied to particular merges; OUT-08 checks them on the output.
+- **[EV-15]** Resolved contacts. After a merge by E3, the pieces of the two elements lie on one loop and touch at the contact point at $t^*$. A contact found at $t^*$ within the cluster radius of a contact resolved at $t^*$ is that same contact and is not scheduled again.
 - **[EV-14]** Loop ids after a merge. The merged loop keeps the id of the larger of the two loops, and the elements of the smaller are relabelled by a walk, so that a run with $m$ merges costs $O(n \log n)$ in relabelling, as splits do [EV-09].
 
 **[EV-10] Local event scheduling.** Each element keeps at most one pending collapse event, recomputed in $O(1)$ whenever its version changes. Stale events are not removed from the heap; they are discarded at pop time by comparing version stamps (lazy deletion).
@@ -307,7 +309,7 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 | Annulus (concentric circles) | the hole front and the outer front meet everywhere | one closed plateau arc at $r = (R_o - R_i)/2$ [RB-07] |
 | Square ring (square hole centred in a square) | the four side contacts, at once | one cycle of four plateau edges at $r = w/2$ ($w$ the wall width), each end joined by a parabolic arc to a junction on an outer corner diagonal |
 
-**[RB-07] Closed plateaus.** A hole whose surrounding front is its exact offset (an annulus, a ring of constant width around a rounded or polygonal hole) meets it everywhere at once: the plateau events at $t^*$ chain into a closed curve, $k = 0$, and both loops vanish. The cluster is resolved as in RB-03 with the closed chain as its region. The axis there is a cycle of plateau edges with a vertex wherever a contributing site changes on either loop; each such vertex has degree 2 (kind transition) unless a shock also ends there. A closed plateau with no site change, the concentric annulus, gets one vertex at the point of the plateau nearest the start vertex of the hole's first input segment, and one plateau-arc edge from that vertex back to itself.
+**[RB-07] Closed plateaus.** A hole whose surrounding front is its exact offset (an annulus, a ring of constant width around a rounded or polygonal hole) meets it everywhere at once: the plateau events at $t^*$ chain into a closed curve, $k = 0$, and both loops vanish. The cluster is resolved as in RB-03 with the closed chain as its region. The axis there is a cycle of plateau edges with a vertex wherever a contributing site changes on either loop; each such vertex has degree 2 (kind transition) unless a shock also ends there. A closed plateau with no site change cannot occur: a circle is two half arcs [IN-03], so even the concentric annulus has vertices at the joins.
 
 **[RB-05] Near-degeneracy.** Events closer than $\varepsilon_t$ in time but farther than $\varepsilon_{\text{geom}}$ apart are processed separately, in order. They can emit very short edges; those are kept, since they are correct, and an optional post-processing step can contract edges shorter than a user threshold.
 
@@ -382,9 +384,10 @@ enum class ConicKind  { line, parabola, ellipse, hyperbola, plateau_line, platea
 
 using SiteId = std::uint32_t; using VertexId = std::uint32_t; using EdgeId = std::uint32_t;
 struct Contact   { SiteId site; Vec2 foot; };
-struct MatVertex { Vec2 p; double r; VertexKind kind; std::uint32_t component;
-                   std::vector<Contact> contacts; std::vector<EdgeId> edges; };  // edges CCW
-struct Component { std::uint32_t outer; std::vector<std::uint32_t> holes;      // input loop indices
+struct MatVertex { Vec2 p; double r; VertexKind kind;
+                   std::vector<Contact> contacts; std::vector<EdgeId> edges;      // edges CCW
+                   std::uint32_t component; };
+struct MatComponent { std::uint32_t outer; std::vector<std::uint32_t> holes;      // input loop indices
                    VertexId first_vertex, vertex_count; EdgeId first_edge, edge_count; };  // [OUT-11]
 
 class MatEdge {
@@ -408,7 +411,7 @@ public:
     std::span<const MatVertex> vertices() const;
     std::span<const MatEdge>   edges() const;
     std::span<const Site>      sites() const;          // maps back to input loop and segment
-    std::span<const Component> components() const;
+    std::span<const MatComponent> components() const;
     const RunStats&            stats() const;
 };
 
@@ -584,12 +587,13 @@ Cited from memory, not re-checked online for this draft.
 | EV-06 | 6 | Shock or regular vertex rule |
 | EV-07 | 6 | MAT edges opened and closed by shocks |
 | EV-08 | 6 | Loop annihilation |
-| EV-09 | 6 | Split or merge by loop identity |
+| EV-09 | 6 | Split or merge by loop identity, within one face |
 | EV-10 | 6 | Local event scheduling with lazy deletion |
 | EV-11 | 6 | Windowed non-local broad phase |
 | EV-12 | 6 | All-pairs debug mode equivalence |
 | EV-13 | 6 | Validity check at pop time |
 | EV-14 | 6 | Loop ids after a merge |
+| EV-15 | 6 | Resolved contacts not found again |
 | KN-01 | 7 | Three-site solve and root acceptance |
 | KN-02 | 7 | Earliest root; degenerate systems routed to section 8 |
 | KN-03 | 7 | Shock position and branch selector |
