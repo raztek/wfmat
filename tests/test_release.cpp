@@ -118,8 +118,8 @@ std::string check_offset(const PreparedRegion& prep, const std::vector<Loop>& lo
 
 double loop_area(const Loop& loop)
 {
-    Region r;
-    r.outer = loop;
+    Region r{{Loop{}}};
+    r.loops = {loop};
     auto prep = prepare(r);
     REQUIRE(prep);
     return prep->area * prep->xf.scale * prep->xf.scale;

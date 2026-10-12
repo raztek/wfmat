@@ -58,8 +58,8 @@ std::size_t occurrences(const std::string& s, const std::string& what)
 // The region transformed by p -> s R(theta) p + t, optionally with the loop reversed.
 Region transformed(const Region& in, double s, double theta, Vec2 t, bool reverse)
 {
-    Region out;
-    const auto& v = in.outer.vertices;
+    Region out{{Loop{}}};
+    const auto& v = in.loops[0].vertices;
     const std::size_t n = v.size();
     for (std::size_t k = 0; k < n; ++k) {
         const std::size_t i = reverse ? n - 1 - k : k;
@@ -68,7 +68,7 @@ Region transformed(const Region& in, double s, double theta, Vec2 t, bool revers
                      s * (std::sin(theta) * p.x + std::cos(theta) * p.y) + t.y};
         // Reversed, vertex i starts the reverse of input segment i - 1.
         const double bulge = reverse ? -v[(i + n - 1) % n].bulge : v[i].bulge;
-        out.outer.vertices.push_back({q, bulge});
+        out.loops[0].vertices.push_back({q, bulge});
     }
     return out;
 }
@@ -99,7 +99,7 @@ TEST_CASE("canonical shapes load, validate and render", "[VER-02][IN-02][IN-07][
     std::ofstream(output_path(std::string(shape.file) + ".svg")) << svg;
 }
 
-TEST_CASE("validation is invariant under similarity and reversal", "[VER-04][IN-07][IN-08]")
+TEST_CASE("validation is invariant under similarity; a reversed loop is rejected", "[VER-04][IN-07][IN-08]")
 {
     const Shape& shape = GENERATE(from_range(std::begin(shapes), std::end(shapes)));
     INFO(shape.file);
@@ -110,8 +110,14 @@ TEST_CASE("validation is invariant under similarity and reversal", "[VER-04][IN-
     for (const bool reverse : {false, true}) {
         INFO("reverse " << reverse);
         const double s = 3.5, theta = 0.7;
-        const PreparedRegion r = prepared(transformed(base, s, theta, {-1e3, 250}, reverse));
-        CHECK(r.reversed == (r0.reversed != reverse));
+        const Region moved = transformed(base, s, theta, {-1e3, 250}, reverse);
+        if (reverse) {
+            auto bad = prepare(moved);
+            REQUIRE_FALSE(bad);
+            CHECK(bad.error().requirement == "IN-08");
+            continue;
+        }
+        const PreparedRegion r = prepared(moved);
         CHECK(r.segments.size() == r0.segments.size());
         CHECK(count(r, JoinKind::convex) == count(r0, JoinKind::convex));
         CHECK(count(r, JoinKind::tangent) == count(r0, JoinKind::tangent));

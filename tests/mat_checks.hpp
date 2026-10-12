@@ -513,27 +513,27 @@ inline std::vector<IPoint> random_star_polygon(std::mt19937_64& rng, int n, std:
 // Convex corners get convex arcs, reflex corners concave ones.
 inline Region filleted(const std::vector<Vec2>& polygon, const std::vector<double>& fraction)
 {
-    Region region;
+    Region region{{Loop{}}};
     const std::size_t n = polygon.size();
     for (std::size_t k = 0; k < n; ++k) {
         const Vec2 prev = polygon[(k + n - 1) % n], p = polygon[k], next = polygon[(k + 1) % n];
         if (fraction[k] <= 0.0) {
-            region.outer.vertices.push_back({p, 0.0});
+            region.loops[0].vertices.push_back({p, 0.0});
             continue;
         }
         const Vec2 u = unit(p - prev), w = unit(next - p);
         const double d = fraction[k] * 0.5 * std::min(dist(prev, p), dist(p, next));
         const double turn = signed_angle(u, w);
-        region.outer.vertices.push_back({p - d * u, bulge_from_sweep(turn)});
-        region.outer.vertices.push_back({p + d * w, 0.0});
+        region.loops[0].vertices.push_back({p - d * u, bulge_from_sweep(turn)});
+        region.loops[0].vertices.push_back({p + d * w, 0.0});
     }
     return region;
 }
 
 inline Region to_region(const std::vector<IPoint>& p)
 {
-    Region region;
-    for (const IPoint& q : p) region.outer.vertices.push_back({{double(q.first), double(q.second)}, 0.0});
+    Region region{{Loop{}}};
+    for (const IPoint& q : p) region.loops[0].vertices.push_back({{double(q.first), double(q.second)}, 0.0});
     return region;
 }
 
@@ -554,7 +554,7 @@ inline Region random_arc_chain(std::mt19937_64& rng, int n)
 {
     Region region = to_region(random_star_polygon(rng, n));
     std::uniform_real_distribution<double> b(-0.25, 0.25);
-    for (BulgeVertex& v : region.outer.vertices) v.bulge = b(rng);
+    for (BulgeVertex& v : region.loops[0].vertices) v.bulge = b(rng);
     return region;
 }
 

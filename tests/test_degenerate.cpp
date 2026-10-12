@@ -131,8 +131,8 @@ std::vector<IPoint> random_symmetric(std::mt19937_64& rng, int k, std::int32_t R
 // A regular n-gon of circumradius 1.
 Region regular_polygon(int n, double phase = 0.0)
 {
-    Region region;
-    for (int k = 0; k < n; ++k) region.outer.vertices.push_back({polar(phase + 2 * pi * k / n), 0.0});
+    Region region{{Loop{}}};
+    for (int k = 0; k < n; ++k) region.loops[0].vertices.push_back({polar(phase + 2 * pi * k / n), 0.0});
     return region;
 }
 
@@ -149,10 +149,10 @@ Region random_tangential(std::mt19937_64& rng, int n)
         const double spare = 2 * pi - 0.05 * n;
         for (double& g : gap) g = 0.05 + spare * g / sum;
         if (*std::max_element(gap.begin(), gap.end()) > 0.8 * pi) continue;
-        Region region;
+        Region region{{Loop{}}};
         double a = phase(rng);
         for (double g : gap) {
-            region.outer.vertices.push_back({polar(a + g / 2) / std::cos(g / 2), 0.0});
+            region.loops[0].vertices.push_back({polar(a + g / 2) / std::cos(g / 2), 0.0});
             a += g;
         }
         return region;
@@ -163,14 +163,14 @@ Region random_tangential(std::mt19937_64& rng, int n)
 // are cocircular and the outline has n-fold symmetry.
 Region gear(int n, double tip = 1.3, double land = 0.35, double top = 0.2)
 {
-    Region region;
+    Region region{{Loop{}}};
     const double step = 2 * pi / n;
     for (int k = 0; k < n; ++k) {
         const double c = k * step;
-        region.outer.vertices.push_back({polar(c - land * step), 0.0});
-        region.outer.vertices.push_back({tip * polar(c - top * step), 0.0});
-        region.outer.vertices.push_back({tip * polar(c + top * step), 0.0});
-        region.outer.vertices.push_back({polar(c + land * step), 0.0});
+        region.loops[0].vertices.push_back({polar(c - land * step), 0.0});
+        region.loops[0].vertices.push_back({tip * polar(c - top * step), 0.0});
+        region.loops[0].vertices.push_back({tip * polar(c + top * step), 0.0});
+        region.loops[0].vertices.push_back({polar(c + land * step), 0.0});
     }
     return region;
 }
@@ -310,8 +310,8 @@ TEST_CASE("Curved slot: a plateau arc between two curvature ends", "[M5][RB-03][
 {
     // Centre line of radius 8 from 0 to 90 degrees, half-width 2, round ends.
     const double b = std::tan(pi / 8);
-    Region region;
-    region.outer.vertices = {{{10, 0}, b}, {{0, 10}, 1.0}, {{0, 6}, -b}, {{6, 0}, 1.0}};
+    Region region{{Loop{}}};
+    region.loops[0].vertices = {{{10, 0}, b}, {{0, 10}, 1.0}, {{0, 6}, -b}, {{6, 0}, 1.0}};
     const MedialAxis mat = mat_of(region);
     REQUIRE(mat.vertices().size() == 2);
     REQUIRE(mat.edges().size() == 1);

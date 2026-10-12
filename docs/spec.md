@@ -1,13 +1,14 @@
 ---
 title: "Wavefront MAT: Design and Specification"
-subtitle: "Version 1.5 · 10 October 2026 · michael"
-version: "1.5"
+subtitle: "Version 2.0 · 11 October 2026 · michael"
+version: "2.0"
 ---
 
 **Revision history**
 
 | Version | Date | Status | Changes |
 | --- | --- | --- | --- |
+| 2.0 | 2026-10-11 | approved baseline (v2) | approved by michael on 11 October 2026; holes: a region is any number of disjoint loops nested up to 8 levels, orientation alternating by level as an input rule (SC-01, IN-02, IN-05 withdrawn, IN-12 to IN-14, ALG-07); loop merges and closed plateaus (EV-09, EV-11, EV-14, RB-03, RB-07); the MAT of each component has one cycle per hole (OUT-08, OUT-11); API and JSON for several loops (API-02, OUT-06); relaxed verification scope (PF-03, VER-02 to VER-05); milestone M4 in three parts |
 | 1.5 | 2026-10-10 | minor revision | OUT-05, API-02: Bézier export as a list of arcs, each turning by less than a right angle, and the flattening rule; OUT-06: the MAT JSON layout; ALG-06, API-02: `inward_offset` as implemented in M7; API-03: CLI options; section 13: the PF-02 targets move from M6 to a new milestone, M8 |
 | 1.4 | 2026-10-09 | minor revision | EV-11, EV-12, RB-01: the windowed broad phase as implemented in M6 (window choice, split candidates, event identity in the queue order); PF-01: heap compaction rule; RB-03: tangent ports compared within the cluster's spread, fast shocks die if they pass through $D$ within $\varepsilon_t$; PF-02: times measured in M6; VER-07: benchmark families |
 | 1.3 | 2026-10-09 | minor revision | EV-04: a circle front can also reach a regular vertex; RB-02, RB-03: cluster radius, port ordering and vertex kinds as implemented in M5; RB-04 and API: `resolve_all_events` option for the cross-check |
@@ -25,14 +26,16 @@ We compute the exact medial axis transform (MAT) of a planar region bounded by l
 
 **Goals**
 
-- **[SC-01]** Input: one closed loop of line segments and circular arcs bounding a simply connected region, as C++ objects or a JSON file.
+- **[SC-01]** Input: one or more closed loops of line segments and circular arcs, pairwise disjoint and nested up to 8 levels, as C++ objects or a JSON file. The region is the material between each outer loop and the loops directly inside it (its holes); a loop inside a hole is the outer loop of another, separate component (an island).
 - **[SC-02]** Output: the full interior MAT as a planar graph. Each edge is an exact conic arc (line, parabola, ellipse or hyperbola branch) with closed-form position $p(r)$, radius $r$, and the two boundary contact points as functions of $r$.
 - **[SC-03]** Exact handling of the degeneracies that dominate CAD data: parallel lines, concentric arcs, tangent ($G^1$) joins, cocircular contacts and symmetric shapes.
 - **[SC-04]** C++20, permissively licensed dependencies only, deterministic results, no global state.
 
-**Non-goals for v1**
+**Non-goals for v2**
 
-- Holes (planned for v2), the exterior MAT, free-form curves (splines, NURBS), external file readers such as DXF, 3D, and pruning or simplification of the axis (offered later as post-processing on the output graph).
+- The exterior MAT (outside the outermost loops or inside a hole), free-form curves (splines, NURBS), external file readers such as DXF, 3D, and pruning or simplification of the axis (offered later as post-processing on the output graph).
+- Loops that touch or cross one another (a hole touching its outer loop, two holes sharing a point).
+- Large-scale performance work: v2 is verified for correctness up to about 5,000 segments (PF-03).
 - Exact (algebraic) arithmetic. We use double precision with tolerance-controlled topology and extended-precision refinement of event times (section 8).
 
 **Why wavefront.** Unlike an incremental Voronoi construction, the front simulation yields MAT edges already ordered by radius, produces offset curves as a by-product, and handles arcs natively because offsets of lines and circles stay lines and circles. Its weak points are event detection for non-adjacent front pieces and simultaneous events; sections 6 to 8 address both.
@@ -41,9 +44,9 @@ We compute the exact medial axis transform (MAT) of a planar region bounded by l
 
 Every boundary piece becomes a site with a signed distance function that is linear (lines) or a shifted Euclidean norm (circles), so every bisector is a conic and every event is the root of at most a quadratic.
 
-**Region and MAT.** $\Omega$ is a bounded open region with boundary $\partial\Omega$, and $d(x) = \operatorname{dist}(x, \partial\Omega)$. The MAT is the pair $(M, r)$: $M$ is the closure of the set of centres of maximal inscribed disks, and $r(x) = d(x)$ on $M$. $M$ is a finite graph homotopy-equivalent to $\Omega$, so for the simply connected regions of v1 it is a tree.
+**Region and MAT.** $\Omega$ is a bounded open region with boundary $\partial\Omega$, and $d(x) = \operatorname{dist}(x, \partial\Omega)$. The MAT is the pair $(M, r)$: $M$ is the closure of the set of centres of maximal inscribed disks, and $r(x) = d(x)$ on $M$. $M$ is a finite graph homotopy-equivalent to $\Omega$: one connected piece per component of $\Omega$, and in a component with $h$ holes exactly $h$ independent cycles, each enclosing one hole. Without holes it is a tree.
 
-**Sites.** Each input segment is a site. Each reflex corner (a right turn when walking the boundary with $\Omega$ on the left) adds a point site at the corner. For $x$ in a site's zone, its distance function is
+**Sites.** Each input segment is a site. Each reflex corner (a right turn when walking a boundary loop with $\Omega$ on the left; on a hole that is a corner pointing into the material) adds a point site at the corner. For $x$ in a site's zone, its distance function is
 
 $$
 d_L(x) = n \cdot x - c, \qquad \lVert n \rVert = 1,\ n \text{ pointing into } \Omega \qquad \text{(line)}
@@ -82,32 +85,44 @@ A convex arc has its centre on the $\Omega$ side; a concave arc bulges into $\Om
 
 ## 3. Input specification
 
-The input is a region given as a single closed chain of lines and arcs in bulge form; it is validated, oriented and normalised before any propagation starts.
+The input is a region given as one or more closed chains of lines and arcs in bulge form; the loops are validated, their nesting is derived, each loop's orientation is checked against its nesting depth, and the whole region is normalised before any propagation starts.
 
 **[IN-01] Representation.** A loop is a cyclic list of vertices $(x, y, \beta)$ with bulge $\beta$. The segment from vertex $i$ to $i+1$ is a line when $\beta = 0$, otherwise a circular arc with $\beta = \tan(\theta/4)$, $\theta$ the signed sweep (the DXF LWPOLYLINE convention). Bulge form guarantees closure and $G^0$ continuity by construction. A single full circle is a loop of two half-arcs ($\beta = \pm 1$ each). An explicit (centre, radius, start angle, sweep) form is also accepted and converted.
 
-**[IN-02] JSON schema (v1)**
+**[IN-02] JSON schema (v2)**
 
 ```json
 {
   "units": "mm",
-  "outer": [[0,0,0],[100,0,0],[100,40,1],[60,40,0],[0,40,0]]
+  "loops": [
+    [[0,0,0],[100,0,0],[100,40,1],[60,40,0],[0,40,0]],
+    [[20,15,-1],[30,15,-1]]
+  ]
 }
 ```
+
+`loops` lists every loop in any order; each loop must already have the orientation of its nesting level [IN-08]. The second loop above is a circular hole of diameter 10, given clockwise (negative bulges) because it is at depth 1. The v1 form, `"outer": [...]`, stays valid and means a region of that one loop; it may be followed by `"holes": [[...], ...]`, which are simply further loops. A document must use `loops` or `outer`, not both. Loops are numbered from 0 in document order (`outer` first, then `holes`), and diagnostics name a loop by that number and a segment by its index in the loop.
 
 **Validation rules (reject with a diagnostic naming the loop and segment)**
 
 1. **[IN-03]** Every segment has length $> \varepsilon_{\text{len}}$; every arc has $\lvert\theta\rvert \in (\varepsilon_{\text{ang}}, 2\pi)$.
-2. **[IN-04]** The loop is simple: no segment pair intersects except consecutive segments at their shared vertex. Checked with an R-tree broad phase and exact line/arc intersection tests.
-3. **[IN-05]** Exactly one loop; input with holes is rejected with a diagnostic saying holes arrive in v2.
+2. **[IN-04]** Each loop is simple: no segment pair intersects except consecutive segments at their shared vertex. Checked with an R-tree broad phase and exact line/arc intersection tests.
+3. **[IN-05]** *Withdrawn in 2.0* (v1: exactly one loop). Replaced by IN-12 and IN-13.
 4. **[IN-06]** No cusp corners (section 2 table). The data contract excludes them; the check is a safeguard.
+5. **[IN-12]** The loops are pairwise disjoint: no segment of one loop intersects or touches a segment of another, so the distance between any two loops exceeds $\varepsilon_{\text{len}}$. Checked in the same R-tree pass as IN-04, over the segments of all loops. A region needs at least one loop.
+
+**[IN-13] Nesting and components.** The depth of a loop is the number of other loops that contain it, found by a point-in-loop test (ray crossing, with arcs) of one of its vertices against each loop whose bounding box contains it; since loops are disjoint, one vertex decides. A loop of even depth is an outer loop; a loop of odd depth is a hole of the loop of depth one less that directly contains it. Each outer loop with its holes forms one component of $\Omega$, and components are numbered in the order of their outer loops in the input. An island in a hole is the outer loop of a further component, which may have holes of its own. Nesting is limited to 8 levels, depths 0 to 7; a loop of depth 8 or more is rejected with a diagnostic naming it.
 
 **Normalisation**
 
-1. **[IN-07]** Translate the bounding-box centre to the origin and scale by $1/L$, $L$ the half-diagonal, so all coordinates lie in $[-1, 1]$. All tolerances are relative to this unit frame; output is mapped back by the inverse transform, radii by $L$.
-2. **[IN-08]** Orient the loop counter-clockwise (signed area via the shoelace formula plus the arc segment areas), so $\Omega$ is on the left.
+1. **[IN-07]** Translate the centre of the bounding box of all loops to the origin and scale by $1/L$, $L$ the half-diagonal, so all coordinates lie in $[-1, 1]$. All tolerances are relative to this unit frame; output is mapped back by the inverse transform, radii by $L$.
+2. **[IN-08]** Orientation alternates with nesting level: loops of even depth (0, 2, 4, 6) run counter-clockwise and loops of odd depth (1, 3, 5, 7) clockwise, so $\Omega$ is on the left of every loop. This is an input rule, checked during validation: the orientation of each input loop is measured (signed area via the shoelace formula plus the arc segment areas), and a loop whose direction does not match its level is rejected, with a diagnostic naming the loop, its depth and the direction expected. Loops are never reversed silently. This changes v1, which reversed a clockwise single loop; a v1 input given clockwise is now rejected.
 3. **[IN-09]** Merge consecutive collinear lines and consecutive co-circular arcs (same centre and radius within $\varepsilon_{\text{geom}}$). This removes spurious transition vertices.
 4. **[IN-10]** Snap near-tangent joins ($\lvert\varphi\rvert \le \varepsilon_{\text{ang}}$) to exact tangency and record them as $G^1$.
+
+IN-09 and IN-10 work on each loop separately, and never across loops.
+
+**[IN-14] Prepared region.** The result of preparation keeps, for every loop, its segments, joins and merge sources as in v1, plus its input index, its depth and its component; and for every component, its outer loop and its holes.
 
 **[IN-11] Tolerances (defaults, unit frame, all configurable)**
 
@@ -124,9 +139,10 @@ The MAT is returned as an embedded graph whose edges are parametrised by radius:
 
 **Graph**
 
-- **[OUT-01]** Vertices: position $p$, radius $r$, kind (section 2), and the list of contacts (site id plus foot point). Incident edges are stored in counter-clockwise order.
-- **[OUT-02]** Edges: birth vertex $v_0$ at $r_0$, death vertex $v_1$ at $r_1 > r_0$, and the two sites (left, right) seen from the direction of travel. Plateau edges ($r_0 = r_1$) are flagged and parametrised by arc length instead.
-- **[OUT-03]** Global: the site table (original segment index, kind, geometry), the normalisation transform, and per-run statistics (event counts by type, clusters resolved, maximum residual).
+- **[OUT-01]** Vertices: position $p$, radius $r$, kind (section 2), component, and the list of contacts (site id plus foot point). Incident edges are stored in counter-clockwise order; an edge that starts and ends at the same vertex appears twice.
+- **[OUT-02]** Edges: birth vertex $v_0$ at $r_0$, death vertex $v_1$ at $r_1 > r_0$, component, and the two sites (left, right) seen from the direction of travel. Plateau edges ($r_0 = r_1$) are flagged and parametrised by arc length instead. The two sites of an edge may lie on different loops.
+- **[OUT-03]** Global: the site table (original loop and segment index, kind, geometry), the normalisation transform, and per-run statistics (event counts by type, loop merges, clusters resolved, maximum residual).
+- **[OUT-11]** Components: for each component of $\Omega$, its outer loop and its holes (input loop indices), and the vertices and edges of its axis. Vertices and edges are stored component by component, in component order.
 
 **[OUT-04] Edge geometry.** Each edge stores its conic type, the data needed to evaluate it in closed form, and a branch selector fixed at birth:
 
@@ -138,12 +154,12 @@ $f_A$ and $f_B$ are the contact (foot) points on the two sites; the inscribed di
 
 **[OUT-05] Evaluation API.** For every edge: position, radius, unit tangent, both feet at a given $r$; arc-length sampling; adaptive flattening to a polyline within a chord tolerance; and exact export as rational quadratic Bézier arcs, with $r$ supplied as a separate per-edge function since it is not polynomial in the Bézier parameter. An edge is exported as one arc per piece that turns by less than a right angle, so every weight is positive; a piece's control point is where its end tangents meet, and its weight follows from one interior point. Flattening subdivides in the edge parameter $u$ until the middle and quarter points of every piece lie within 0.7 of the chord tolerance of their chord.
 
-**[OUT-06] Formats.** C++ object graph (primary), JSON (sites, vertices with their contacts, edges with their conic kind, radii, Bézier arcs and optional flattened polylines, inward offsets as bulge loops, and the run statistics), and SVG for inspection, showing the boundary, MAT edges coloured by $r$, inward offsets and optional inscribed disks.
+**[OUT-06] Formats.** C++ object graph (primary), JSON (components, sites with their loop, vertices with their component and contacts, edges with their conic kind, radii, Bézier arcs and optional flattened polylines, inward offsets as bulge loops, and the run statistics), and SVG for inspection, showing every boundary loop, MAT edges coloured by $r$, inward offsets and optional inscribed disks.
 
 **Guarantees (checked by the validator in section 12)**
 
 - **[OUT-07]** For every sampled point $p$ on an edge, $\lvert d(p) - r\rvert \le \varepsilon_{\text{res}}$ and at least two distinct feet exist, except at degree-1 vertices.
-- **[OUT-08]** The graph is a tree: connected, with no cycles.
+- **[OUT-08]** The axis of each component is connected and has cycle rank equal to its number of holes ($E - V + 1 = h$ for that component), so a component without holes gives a tree, as in v1. Every hole is enclosed by a cycle of the axis that encloses no other hole.
 - **[OUT-09]** The union of the inscribed disks reproduces $\Omega$ to within the sampling tolerance.
 - **[OUT-10]** Same input, same output, bit for bit, on the same platform and build.
 
@@ -155,13 +171,13 @@ The front is a set of cyclic doubly linked lists of elements and vertices, advan
 
 - Element: the site it offsets, prev and next vertex, and a version counter bumped whenever either neighbour changes. Its live part at time $t$ is the arc of the offset between its two vertices.
 - Vertex: kind (shock or regular), left and right element, birth time and point, branch selector, and for shocks the id of the MAT edge being traced.
-- Loop: entry element and element count. A loop with no vertices (a full circle offset) is allowed.
+- Loop: entry element and element count. A loop with no vertices (a full circle offset) is allowed. Every element carries the id of its loop; loops of one component share one engine and one queue.
 - Pools: elements, vertices and events live in index-addressed vectors with free lists; ids are stable 32-bit integers, which keeps the structure cache-friendly and makes runs deterministic.
 
 **[ALG-03] Initialisation**
 
-1. Build sites from the normalised loop; classify each corner (section 2).
-2. Create one element per site in boundary order, inserting a zero-length point-site element at every reflex corner.
+1. Build sites from every normalised loop of the component; classify each corner (section 2).
+2. Create one front loop per boundary loop, with one element per site in boundary order, inserting a zero-length point-site element at every reflex corner.
 3. Create a vertex at every junction: a shock at convex corners (its MAT edge starts at a corner vertex, $r = 0$), a regular vertex at tangent and reflex joins.
 4. Schedule the local event of every element and seed non-local candidates (section 6).
 
@@ -178,9 +194,11 @@ while (auto ev = queue.pop_valid()) {          // skips events whose version sta
 finalize_open_edges();                        // all loops empty; every MAT edge has both ends
 ```
 
-**[ALG-05] Termination.** Every event creates at least one MAT vertex and the MAT has $O(n)$ vertices, so there are $O(n)$ events. The simulation ends when every loop is empty, at $t = \max r$, the radius of the largest inscribed disk.
+**[ALG-05] Termination.** Every event creates at least one MAT vertex and the MAT has $O(n)$ vertices, so there are $O(n)$ events. The simulation of a component ends when every loop is empty, at $t = \max r$, the radius of its largest inscribed disk. With holes the axis still has $O(n)$ vertices, so the bound holds.
 
-**[ALG-06] By-product.** Snapshotting the front at any $t$ yields the exact inward offset curve of $\Omega$ at distance $t$ as lines and arcs, at no extra cost: the engine processes every event up to $t$ and writes each loop's live elements between their vertices' positions as a counter-clockwise bulge loop. Pieces shorter than $\varepsilon_{\text{len}}$ are dropped, so the offset at $t = 0$ is the boundary and past the largest inscribed radius it is empty.
+**[ALG-06] By-product.** Snapshotting the front at any $t$ yields the exact inward offset curve of $\Omega$ at distance $t$ as lines and arcs, at no extra cost: the engine processes every event up to $t$ and writes each loop's live elements between their vertices' positions as a bulge loop with $\Omega$ on its left: counter-clockwise where the offset bounds the material from outside, clockwise where it bounds a hole. Loops are grouped by component. Pieces shorter than $\varepsilon_{\text{len}}$ are dropped, so the offset at $t = 0$ is the boundary and past the largest inscribed radius it is empty.
+
+**[ALG-07] Components.** Each component of $\Omega$ runs in its own engine, in component order, in the unit frame of the whole region: fronts of different components are separated by boundary and never meet. Their results are concatenated per OUT-11. A failure in one component fails the run and names the component.
 
 ## 6. Events and handlers
 
@@ -191,22 +209,23 @@ Three generic event types produce every MAT vertex: a local collapse, a non-loca
 | **[EV-01]** E1a collapse, shock + shock | element $B$ between $A\mid B$ and $B\mid C$ shrinks to a point | 3-site solve $(A,B,C)$ | junction, 3 contacts | remove $B$; new vertex $A\mid C$ |
 | **[EV-02]** E1b collapse, shock + regular | shock $A\mid B$ reaches the junction of $B$ with its tangent or reflex neighbour $C$ | bisector $(A,B)$ meets the junction's normal ray | transition | remove $B$; shock continues as $A\mid C$, edge changes conic |
 | **[EV-03]** E1c collapse, regular + regular | convex arc $B$ shrinks to its centre ($t = R$) | closed form | curvature end | remove $B$; new shock $A\mid C$, edge born with $r = R$ |
-| **[EV-04]** E2 split | shock $A\mid B$ reaches the interior of a non-adjacent element $C$; with circle fronts, $C$ can also reach a regular vertex $A\mid B$ inside its live part | 3-site solve $(A,B,C)$; for a regular vertex, the hit time of [KN-04] | junction, 3 contacts; extremum (min of $r$) for a regular vertex, which traces no edge | split $C$ into $C_1, C_2$; new shocks $A\mid C_2$ and $C_1\mid B$; split the loop |
-| **[EV-05]** E3 contact | non-adjacent elements $A$ and $C$ become tangent | common normal; $t$ = half the gap | extremum (min of $r$) | split $A$ and $C$; two new shocks moving apart; split the loop |
+| **[EV-04]** E2 split | shock $A\mid B$ reaches the interior of a non-adjacent element $C$; with circle fronts, $C$ can also reach a regular vertex $A\mid B$ inside its live part | 3-site solve $(A,B,C)$; for a regular vertex, the hit time of [KN-04] | junction, 3 contacts; extremum (min of $r$) for a regular vertex, which traces no edge | split $C$ into $C_1, C_2$; new shocks $A\mid C_2$ and $C_1\mid B$; split the loop, or merge two loops [EV-09] |
+| **[EV-05]** E3 contact | non-adjacent elements $A$ and $C$ become tangent | common normal; $t$ = half the gap | extremum (min of $r$) | split $A$ and $C$; two new shocks moving apart; split the loop, or merge two loops [EV-09] |
 
 **Rules shared by all handlers**
 
 - **[EV-06]** A new vertex between elements $X$ and $Y$ is a shock if $X$ and $Y$ meet at a corner, and regular if they meet tangentially (only possible when they are original $G^1$ neighbours).
 - **[EV-07]** Every shock that dies closes its MAT edge at the event vertex; every new shock opens one there.
 - **[EV-08]** A loop that drops to two elements both shrinking to one point, or to one element with no vertices (a circle reaching zero radius), is annihilated: its last vertex is an extremum (max of $r$) or a curvature end.
-- **[EV-09]** Without holes, E2 and E3 always split a loop and never merge two, which is why the v1 MAT is a tree. Loop merges arrive with holes in v2.
+- **[EV-09]** Split or merge. E2 and E3 join two points of the front. When both elements lie on one loop, the loop splits in two; when they lie on two loops, the two merge into one. Nothing else is possible, so the loop ids of the elements decide, with no geometric test. Every split adds a loop, every merge and every annihilation removes one, and a cluster [RB-03] counts by the loops it removes and creates; a component starts with $1 + h$ loops and ends with none. The cycles of the axis are not tied to particular merges; OUT-08 checks them on the output.
+- **[EV-14]** Loop ids after a merge. The merged loop keeps the id of the larger of the two loops, and the elements of the smaller are relabelled by a walk, so that a run with $m$ merges costs $O(n \log n)$ in relabelling, as splits do [EV-09].
 
 **[EV-10] Local event scheduling.** Each element keeps at most one pending collapse event, recomputed in $O(1)$ whenever its version changes. Stale events are not removed from the heap; they are discarded at pop time by comparing version stamps (lazy deletion).
 
-**[EV-11] Non-local event scheduling.** Split and contact candidates come from a windowed broad phase that relies on the Lipschitz bound of section 2: a live front piece at time $t + \Delta$ lies within $\Delta$ of the same piece at time $t$.
+**[EV-11] Non-local event scheduling.** Split and contact candidates, between elements of one loop or of two loops of the same component, come from a windowed broad phase that relies on the Lipschitz bound of section 2: a live front piece at time $t + \Delta$ lies within $\Delta$ of the same piece at time $t$.
 
 1. A window $[t_k,\, t_k + \Delta_k]$ opens when the next queued event lies beyond the current one, at the end of the previous window. The box of every live element at $t_k$ (its two ends, and the extreme points of an arc between them), inflated by $\Delta_k$, goes into an R-tree.
-2. For each overlapping pair of non-adjacent elements, compute exact E2 and E3 candidates in $(t_k,\, t_k + \Delta_k]$ with the kernel, and enqueue the valid ones. A shock reaching element $c$ moves along both of its elements, so a split is a candidate only when both of their boxes meet the box of $c$. Roots outside the window are left to the window that contains them.
+2. For each overlapping pair of non-adjacent elements (elements on different loops are never adjacent), compute exact E2 and E3 candidates in $(t_k,\, t_k + \Delta_k]$ with the kernel, and enqueue the valid ones. A shock reaching element $c$ moves along both of its elements, so a split is a candidate only when both of their boxes meet the box of $c$. Roots outside the window are left to the window that contains them.
 3. $\Delta_0$ is the median distance from an element's box to the nearest box of a non-adjacent element, or the median box diagonal when that median is zero. A window doubles when the previous one found fewer than 8 candidate pairs per live element or handled fewer events than a quarter of the live elements, and halves when it found more than 64 pairs per element.
 4. When a handler creates or reshapes an element inside the window, query the current R-tree for it immediately, so no candidate is missed. A new element enters the R-tree with its box from now to the end of the window.
 
@@ -270,10 +289,10 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 
 1. Region. Take the cluster's points, or plateau segment, and grow it by $\rho$ into a small region $D$. Its anchors are the mean of the event points, or the two ends of the plateau.
 2. Kill. Every element whose live part at $t^*$ lies inside $D$ dies. Every shock with its position in $D$ dies and closes its MAT edge at the cluster vertex. So does a shock whose path over $[t^* - \varepsilon_t,\ t^* + \varepsilon_t]$ passes through $D$: a shock between nearly parallel fronts moves so fast that rounding in $t^*$ alone can leave it far outside $D$. An arc whose two ends meet within $D$ counts as having no live part there, with the same angular allowance as in step 4.
-3. Chains. The surviving front near $D$ falls into $k$ chains; each enters $D$ through a last surviving element $e_{\text{in}}$ and leaves through a first surviving element $e_{\text{out}}$.
+3. Chains. The surviving front near $D$ falls into $k$ chains, which may belong to several loops (a hole front and the front around it meeting at a cluster); each enters $D$ through a last surviving element $e_{\text{in}}$ and leaves through a first surviving element $e_{\text{out}}$.
 4. Relink. Sort the ports ($e_{\text{in}}$ and $e_{\text{out}}$ of every chain) counter-clockwise around $D$ by the direction in which their front leaves the anchor, and fronts tangent there by their curvature. Directions count as tangent within $\varepsilon_{\text{ang}}$ plus, for each curved front of radius $r$, the cluster's spread over $r$: the anchor stands for every point of the cluster, so a tangency a cluster radius from a vertex is measured slightly off, and a link between tangent ports opens its shock along their common direction. The region near $D$ lies counter-clockwise of an $e_{\text{out}}$ and clockwise of an $e_{\text{in}}$, so each $e_{\text{in}}$ links to the $e_{\text{out}}$ just before it. Each link is a new vertex, shock or regular by the corner rule, and a shock opens a new MAT edge moving into the sector between the two.
 5. Emit. One MAT vertex at each anchor with $r = t^*$, its contacts the union of the sites touching it; for a plateau, a constant-radius edge joins the two. The vertex kind follows from its degree: three or more edges make a junction; two make a maximum (two shocks ending), a minimum (two starting) or a transition (one of each, or a plateau and one shock); one or none make a curvature end.
-6. Rebuild loops by walking the relinked lists: $k = 0$ annihilates a loop.
+6. Rebuild loops by walking the relinked lists: $k = 0$ annihilates every loop in the cluster. One relink may split some loops and merge others; the new loop ids follow from the walks, with the rule of EV-14 for which loop keeps its id.
 
 **[RB-04]** The simple handlers in section 6 are the special cases $k = 1$ (collapse) and $k = 2$ (split, contact); they are cross-checked against this procedure by a debug option, `Options::resolve_all_events`, that sends every event through it, and the test suite requires the same axis either way.
 
@@ -285,6 +304,10 @@ Degenerate configurations are the normal case in CAD data (rectangles, slots, re
 | Regular $n$-gon | $n$ collapses at the centre | one vertex of degree $n$ |
 | Disk | a loop with no vertices | one point |
 | Slot (two semicircles, two lines) | both arcs reach their centres as the lines meet | plateau edge between two curvature ends |
+| Annulus (concentric circles) | the hole front and the outer front meet everywhere | one closed plateau arc at $r = (R_o - R_i)/2$ [RB-07] |
+| Square ring (square hole centred in a square) | the four side contacts, at once | one cycle of four plateau edges at $r = w/2$ ($w$ the wall width), each end joined by a parabolic arc to a junction on an outer corner diagonal |
+
+**[RB-07] Closed plateaus.** A hole whose surrounding front is its exact offset (an annulus, a ring of constant width around a rounded or polygonal hole) meets it everywhere at once: the plateau events at $t^*$ chain into a closed curve, $k = 0$, and both loops vanish. The cluster is resolved as in RB-03 with the closed chain as its region. The axis there is a cycle of plateau edges with a vertex wherever a contributing site changes on either loop; each such vertex has degree 2 (kind transition) unless a shock also ends there. A closed plateau with no site change, the concentric annulus, gets one vertex at the point of the plateau nearest the start vertex of the hole's first input segment, and one plateau-arc edge from that vertex back to itself.
 
 **[RB-05] Near-degeneracy.** Events closer than $\varepsilon_t$ in time but farther than $\varepsilon_{\text{geom}}$ apart are processed separately, in order. They can emit very short edges; those are kept, since they are correct, and an optional post-processing step can contract edges shorter than a user threshold.
 
@@ -325,6 +348,8 @@ The filleted star of 100,000 segments still fails: its spikes are so thin that n
 
 The targets are budgets for v1 to be measured against, not results; the benchmark suite in section 12 tracks them. Parallelism is out of scope for v1, because the event order is inherently sequential; batch processing of many shapes is parallel by construction, since runs share no state.
 
+**[PF-03] Scope for v2 (decided 11 October 2026).** Holes are verified for correctness on inputs up to about 5,000 segments in all; slow but correct results are acceptable there. v2 sets no new speed targets and adds no stress cases beyond that size. The PF-02 targets and M8 stay where v1 left them.
+
 ## 10. Software architecture and C++ API
 
 **[API-01]** The library, `wfmat`, is a layered set of small modules with one public entry point, `compute_mat`; the geometric kernel is pure and stateless, and all mutable state lives in one engine object per run.
@@ -341,7 +366,7 @@ namespace wfmat {
 struct Vec2 { double x, y; };
 struct BulgeVertex { Vec2 p; double bulge; };          // bulge = tan(sweep / 4)
 struct Loop   { std::vector<BulgeVertex> vertices; };
-struct Region { Loop outer; };                         // holes: v2
+struct Region { std::vector<Loop> loops; };            // any order, orientation, nesting [IN-13]
 
 struct Tolerances { double geom = 1e-10, len = 1e-9, ang = 1e-9, time = 1e-11; };
 enum class BroadPhase { windowed_rtree, all_pairs };
@@ -357,13 +382,16 @@ enum class ConicKind  { line, parabola, ellipse, hyperbola, plateau_line, platea
 
 using SiteId = std::uint32_t; using VertexId = std::uint32_t; using EdgeId = std::uint32_t;
 struct Contact   { SiteId site; Vec2 foot; };
-struct MatVertex { Vec2 p; double r; VertexKind kind;
+struct MatVertex { Vec2 p; double r; VertexKind kind; std::uint32_t component;
                    std::vector<Contact> contacts; std::vector<EdgeId> edges; };  // edges CCW
+struct Component { std::uint32_t outer; std::vector<std::uint32_t> holes;      // input loop indices
+                   VertexId first_vertex, vertex_count; EdgeId first_edge, edge_count; };  // [OUT-11]
 
 class MatEdge {
 public:
     VertexId  v0() const;  VertexId v1() const;        // birth, death; r(v0) <= r(v1)
     SiteId    left() const; SiteId right() const;
+    std::uint32_t component() const;
     ConicKind kind() const;
     double r0() const; double r1() const;
     Vec2 point(double r) const;                        // not for plateau edges
@@ -379,18 +407,22 @@ class MedialAxis {
 public:
     std::span<const MatVertex> vertices() const;
     std::span<const MatEdge>   edges() const;
-    std::span<const Site>      sites() const;          // maps back to input segments
+    std::span<const Site>      sites() const;          // maps back to input loop and segment
+    std::span<const Component> components() const;
     const RunStats&            stats() const;
 };
 
 Result<MedialAxis> compute_mat(const Region&, const Options& = {});
-Result<std::vector<Loop>> inward_offset(const Region&, double distance, const Options& = {});
+Result<std::vector<std::vector<Loop>>> inward_offset(const Region&, double distance, const Options& = {});
+                                                       // one list of loops per component [ALG-06]
 // also for a PreparedRegion; std::string io::write_mat_json(mat, offsets, {units, chord_tol});
 
 } // namespace wfmat
 ```
 
-**[API-03]** `Result<T>` is `tl::expected<T, Error>`, keeping the C++20 baseline (it maps directly onto `std::expected` if the project later moves to C++23); `Error` carries a code (`invalid_input`, `numerical_failure`, `invariant_violation`, or `unsupported` for valid input that the current milestone does not yet handle, with the milestone that will in the error's requirement field), the offending loop and segment, and the path of the diagnostic dump if one was written. All output coordinates and radii are in the caller's units; normalisation is internal. A command-line tool, `wfmat-cli`, wraps `compute_mat` and `inward_offset` for JSON in, JSON and SVG out: `--json`, `--svg`, `--flatten <tolerance>`, `--offset <distance>` (repeatable) and `--version`. `docs/api.md` documents the public API.
+Version 2.0 changes the API in three places, so the library version moves to 2.0.0: `Region` holds a list of loops instead of `outer` (`Region{{loop}}` is the v1 region), vertices and edges carry their component, and `inward_offset` groups its loops by component.
+
+**[API-03]** `Result<T>` is `tl::expected<T, Error>`, keeping the C++20 baseline (it maps directly onto `std::expected` if the project later moves to C++23); `Error` carries a code (`invalid_input`, `numerical_failure`, `invariant_violation`, or `unsupported` for valid input that the current milestone does not yet handle, with the milestone that will in the error's requirement field), the offending loop and segment (input numbering, IN-02) and component, and the path of the diagnostic dump if one was written. All output coordinates and radii are in the caller's units; normalisation is internal. A command-line tool, `wfmat-cli`, wraps `compute_mat` and `inward_offset` for JSON in, JSON and SVG out: `--json`, `--svg`, `--flatten <tolerance>`, `--offset <distance>` (repeatable) and `--version`. `docs/api.md` documents the public API.
 
 ## 11. Libraries and licensing
 
@@ -428,31 +460,39 @@ Every test cites the requirement identifiers it verifies. Correctness is establi
 | Slot (stadium) | one plateau edge between the arc centres, $r = R$ |
 | L-shape | reflex corner gives two parabolic edges |
 | Rectangle with one filleted corner | the corner branch ends at the fillet centre, a curvature end with $r = R$ |
+| Annulus, radii $R_o > R_i$, concentric | one closed plateau arc, radius $(R_o + R_i)/2$, $r = (R_o - R_i)/2$ |
+| Eccentric annulus, centres $e$ apart | the ellipse with foci at both centres and major semi-axis $(R_o + R_i)/2$; $r$ from $(R_o - R_i - e)/2$ (minimum) to $(R_o - R_i + e)/2$ (maximum) |
+| Square ring (square hole centred in a square) | as in the section 8 table: one cycle, four plateaus |
+| Disk with $k$ equal circular holes on a concentric circle | $k$-fold symmetric axis with $k$ independent cycles |
+| Nested islands (square ring, disk in the hole, ring in that disk ..., 8 levels deep; 9 levels rejected) | one component per outer loop, each with the axis of its own row above |
 
-**[VER-03] Oracle comparison.** For polygonal inputs, Boost.Polygon's Voronoi diagram of the segments, restricted to the interior and with reflex-corner spokes removed, must match our axis to within $10^{-9}$ of the shape size. For inputs with arcs, a dense sampling oracle (Voronoi of fine polylines) must converge to our axis as the sampling refines.
+**[VER-03] Oracle comparison.** For polygonal inputs, with or without holes, Boost.Polygon's Voronoi diagram of the segments of all loops, restricted to the material and with reflex-corner spokes removed, must match our axis to within $10^{-9}$ of the shape size. For inputs with arcs, a dense sampling oracle (Voronoi of fine polylines) must converge to our axis as the sampling refines.
 
 **[VER-04] Property checks run on every test output (the validator in section 4)**
 
 - Residual: $\lvert d(p) - r\rvert$ along each edge, with $d$ computed by brute force over all sites.
-- Topology: a tree, with degrees matching vertex kinds.
+- Topology: per component, connected with cycle rank equal to its number of holes [OUT-08], with degrees matching vertex kinds.
 - Reconstruction: the union of inscribed disks matches $\Omega$ within the sampling tolerance.
-- Invariance: translating, rotating, scaling, and reversing the input loop order give the same axis up to the transform.
+- Invariance: translating, rotating, scaling, and listing the loops in another order give the same axis up to the transform and the component numbering. Reversing any loop must be rejected [IN-08].
 
-**[VER-05] Randomised testing.** Random star-shaped polygons with filleted corners, and random arc chains, at $10^4$ shapes per CI run with fixed seeds. Any failure is minimised automatically and stored as a regression fixture.
+**[VER-05] Randomised testing.** Random star-shaped polygons with filleted corners, and random arc chains, at $10^4$ shapes per CI run with fixed seeds. With holes: the same outlines with one to eight random holes (disks, small filleted polygons, scaled copies of the outline) placed by rejection so they stay disjoint, at $10^3$ shapes per CI run and at most about 5,000 segments each [PF-03]. Any failure is minimised automatically and stored as a regression fixture.
 
-**[VER-06] Degeneracy suite.** Families built to hit clusters: rectangles and slots, regular polygons up to $n = 1024$, cocircular point sets, gears, and shapes with exact symmetry along both axes.
+**[VER-06] Degeneracy suite.** Families built to hit clusters: rectangles and slots, regular polygons up to $n = 1024$, cocircular point sets, gears, and shapes with exact symmetry along both axes; with holes, the closed plateaus of RB-07 (annuli, constant-width rings around rounded and polygonal holes), symmetric hole patterns, and holes whose fronts reach the outer front at a corner.
 
-**[VER-07] Benchmarks.** Google Benchmark on scaled families (gear outlines, random fillets on a star polygon, a smooth wavy outline, a spiky star polygon; a font glyph set to follow) at $10^3$ to $10^5$ segments, tracked against the targets in section 9, with the all-pairs mode at $10^3$ for scale.
+**[VER-07] Benchmarks.** (v1; v2 adds none, PF-03.) Google Benchmark on scaled families (gear outlines, random fillets on a star polygon, a smooth wavy outline, a spiky star polygon; a font glyph set to follow) at $10^3$ to $10^5$ segments, tracked against the targets in section 9, with the all-pairs mode at $10^3$ for scale.
 
 ## 13. Milestones
 
-Implementation proceeds in seven increments up to the v1.0 release and one after it (M4, holes, moves to v2), each closed by an exit test, so that the hardest parts (arcs, clusters) land on a validated base; no dates are set yet.
+Implementation proceeds in seven increments up to the v1.0 release, one more for performance (M8), and M4, holes, which is v2, each closed by an exit test, so that the hardest parts (arcs, clusters) land on a validated base; no dates are set yet.
 
 1. **M0 Scaffold.** CMake project, geom, input validation and normalisation, JSON reader, SVG writer, brute-force distance validator. Exit: all canonical shapes load, validate and render.
 2. **M1 Kernel.** Site equations, three-site solve, trajectories, contact times, binary128 refinement. Exit: kernel unit tests pass against the SymPy fixtures.
 3. **M2 Polygons.** Lines and reflex point sites, events E1a, E1b, E2, E3, all-pairs broad phase. Exit: matches the Boost.Polygon oracle on $10^4$ random polygons.
 4. **M3 Arcs.** Convex and concave arcs, tangent joins, E1c. Exit: canonical arc shapes and the sampling oracle.
-5. **M4 Holes (v2).** Multiple loops and loop merges. Exit: Betti-number check and annulus tests.
+5. **M4 Holes (v2).** Multiple loops and loop merges, delivered in three parts after the v1 release, one pull request each:
+    - **M4.1 Input.** `Region` with several loops, JSON `loops` (and `outer` with `holes`), IN-12 disjointness, IN-13 nesting and components, IN-08 orientation check by depth, prepared region per IN-14, SVG of all loops; `compute_mat` still answers `unsupported` for a region with holes, naming M4.2. Exit: valid and invalid multi-loop inputs load, validate and render.
+    - **M4.2 Engine.** Per-component runs (ALG-07), events across loops with merges (EV-09, EV-11, EV-14), clusters on several loops and closed plateaus (RB-03, RB-07), components in the output (OUT-01 to OUT-03, OUT-11) and the cycle-rank check (OUT-08). Exit: the VER-02 hole shapes and the degeneracy suite with holes, through both the simple handlers and `resolve_all_events`, and identical event sequences to all-pairs mode.
+    - **M4.3 Release 2.0.** Oracle comparison and randomised tests with holes (VER-03, VER-05), offsets and JSON grouped by component, CLI, `docs/api.md`, and a pinned vcpkg baseline (`vcpkg-configuration.json`) so Visual Studio 2026's bundled vcpkg builds the repository. Exit: v2.0.0 tag.
 6. **M5 Degeneracies.** Cluster resolution and plateau edges. Exit: degeneracy suite passes; simple handlers agree with cluster resolution.
 7. **M6 Performance.** Windowed R-tree broad phase, heap compaction. Exit: identical event sequences to all-pairs mode. Merged with the section 9 targets still missed, which move to M8 (decided 10 October 2026).
 8. **M7 Release.** Bézier export, flattening, inward offsets, CLI, API documentation. Exit: v1.0 tag, created by CI when the project version on main reaches 1.0.0.
@@ -460,7 +500,7 @@ Implementation proceeds in seven increments up to the v1.0 release and one after
 
 ## 14. Decisions and risks
 
-All six scope decisions were confirmed on 8 October 2026; four technical risks have named mitigations.
+The six scope decisions of v1 were confirmed on 8 October 2026 and the v2 decisions on 11 October 2026; five technical risks have named mitigations.
 
 **Decisions**
 
@@ -468,6 +508,8 @@ All six scope decisions were confirmed on 8 October 2026; four technical risks h
 | --- | --- |
 | Licensing | permissive licences (BSL-1.0, MIT, Apache-2.0) are acceptable; strict public domain is not required |
 | Holes | deferred to v2; v1 accepts a single loop |
+| Holes in v2 (11 October 2026) | loops nested up to 8 levels (depths 0 to 7), orientation an input rule: counter-clockwise on even levels, clockwise on odd levels, a mismatch rejected; material between each outer loop and the loops directly inside it; one axis component per outer loop; loops pairwise disjoint; interior MAT only; the 8-level limit and the orientation rule set by michael |
+| Verification scope in v2 (11 October 2026) | correctness up to about 5,000 segments; slow but correct is acceptable; no new performance targets |
 | Exterior MAT | out of scope |
 | Language level | C++20 baseline |
 | Input formats | bulge JSON and the C++ API only; no external readers |
@@ -481,6 +523,7 @@ All six scope decisions were confirmed on 8 October 2026; four technical risks h
 | Missed non-local event in the broad phase | missing MAT branch | Lipschitz-based window inflation; all-pairs mode as a standing regression oracle |
 | Ill-conditioned roots near tangency | event time or position error | binary128 refinement with condition estimates feeding the clustering |
 | $O(n^2)$ non-local candidates on adversarial shapes | slow runs | adaptive window size; measured in the benchmark suite |
+| Closed plateaus and clusters spanning two loops (v2) | wrong relinking, a loop that never closes | RB-07 handled inside generic cluster resolution; constant-width rings in the degeneracy suite; cross-check with `resolve_all_events` |
 
 ## 15. References
 
@@ -497,7 +540,7 @@ Cited from memory, not re-checked online for this draft.
 
 | ID | Section | Requirement |
 | --- | --- | --- |
-| SC-01 | 1 | Single closed loop of lines and arcs as input |
+| SC-01 | 1 | Disjoint nested loops of lines and arcs as input |
 | SC-02 | 1 | Full interior MAT with exact conic edges and radius |
 | SC-03 | 1 | Exact handling of CAD degeneracies |
 | SC-04 | 1 | C++20, permissive dependencies, determinism, no global state |
@@ -505,14 +548,17 @@ Cited from memory, not re-checked online for this draft.
 | IN-01 | 3 | Bulge-form loop representation |
 | IN-02 | 3 | JSON input schema |
 | IN-03 | 3 | Minimum segment length and arc sweep |
-| IN-04 | 3 | Simple loop |
-| IN-05 | 3 | Exactly one loop; holes rejected |
+| IN-04 | 3 | Each loop simple |
+| IN-05 | 3 | Withdrawn in 2.0 (was: exactly one loop) |
 | IN-06 | 3 | Cusp corners rejected |
 | IN-07 | 3 | Normalisation to the unit frame |
-| IN-08 | 3 | Counter-clockwise orientation |
+| IN-08 | 3 | Orientation must match nesting depth |
 | IN-09 | 3 | Merge collinear and co-circular neighbours |
 | IN-10 | 3 | Snap near-tangent joins to G1 |
 | IN-11 | 3 | Configurable tolerances with defaults |
+| IN-12 | 3 | Loops pairwise disjoint |
+| IN-13 | 3 | Nesting depth (at most 8 levels) and components |
+| IN-14 | 3 | Prepared region with loops and components |
 | OUT-01 | 4 | Vertex record |
 | OUT-02 | 4 | Edge record and plateau parametrisation |
 | OUT-03 | 4 | Global data: site table, transform, statistics |
@@ -520,14 +566,16 @@ Cited from memory, not re-checked online for this draft.
 | OUT-05 | 4 | Edge evaluation API |
 | OUT-06 | 4 | Output formats: C++, JSON, SVG |
 | OUT-07 | 4 | Distance residual and two feet |
-| OUT-08 | 4 | MAT is a tree |
+| OUT-08 | 4 | Per component: connected, cycle rank equals holes |
 | OUT-09 | 4 | Disk union reproduces the region |
 | OUT-10 | 4 | Bit-for-bit determinism |
+| OUT-11 | 4 | Component table |
 | ALG-02 | 5 | Front data structure |
 | ALG-03 | 5 | Initialisation |
 | ALG-04 | 5 | Main event loop |
 | ALG-05 | 5 | Termination |
 | ALG-06 | 5 | Inward offset by-product |
+| ALG-07 | 5 | One engine run per component |
 | EV-01 | 6 | E1a collapse, shock + shock |
 | EV-02 | 6 | E1b collapse, shock + regular |
 | EV-03 | 6 | E1c collapse at curvature centre |
@@ -536,11 +584,12 @@ Cited from memory, not re-checked online for this draft.
 | EV-06 | 6 | Shock or regular vertex rule |
 | EV-07 | 6 | MAT edges opened and closed by shocks |
 | EV-08 | 6 | Loop annihilation |
-| EV-09 | 6 | No loop merges in v1 |
+| EV-09 | 6 | Split or merge by loop identity |
 | EV-10 | 6 | Local event scheduling with lazy deletion |
 | EV-11 | 6 | Windowed non-local broad phase |
 | EV-12 | 6 | All-pairs debug mode equivalence |
 | EV-13 | 6 | Validity check at pop time |
+| EV-14 | 6 | Loop ids after a merge |
 | KN-01 | 7 | Three-site solve and root acceptance |
 | KN-02 | 7 | Earliest root; degenerate systems routed to section 8 |
 | KN-03 | 7 | Shock position and branch selector |
@@ -553,8 +602,10 @@ Cited from memory, not re-checked online for this draft.
 | RB-04 | 8 | Simple handlers cross-checked against clusters |
 | RB-05 | 8 | Near-degenerate events processed separately |
 | RB-06 | 8 | Invariant checks and diagnostic abort |
+| RB-07 | 8 | Closed plateaus |
 | PF-01 | 9 | Complexity bounds |
 | PF-02 | 9 | Performance targets |
+| PF-03 | 9 | Verification scope for v2 |
 | API-01 | 10 | Single entry point, stateless kernel |
 | API-02 | 10 | Public API types and functions |
 | API-03 | 10 | Result and Error types, caller units, CLI |

@@ -11,9 +11,35 @@ namespace {
 
 using nlohmann::json;
 
-auto schema_error(std::string message, std::optional<std::size_t> segment = std::nullopt)
+// One loop: an array of [x, y] or [x, y, bulge] vertices. what names it in diagnostics.
+Result<Loop> parse_loop(const json& value, const std::string& what, std::size_t loop)
 {
-    return make_error(ErrorCode::invalid_input, "IN-02", std::move(message), 0, segment);
+    if (!value.is_array()) return make_error(ErrorCode::invalid_input, "IN-02", what + " must be an array of vertices", loop);
+    Loop out;
+    for (std::size_t i = 0; i < value.size(); ++i) {
+        const json& v = value[i];
+        if (!v.is_array() || v.size() < 2 || v.size() > 3)
+            return make_error(ErrorCode::invalid_input, "IN-02",
+                              what + ": vertex " + std::to_string(i) + " must be [x, y] or [x, y, bulge]", loop, i);
+        for (const json& c : v)
+            if (!c.is_number())
+                return make_error(ErrorCode::invalid_input, "IN-02",
+                                  what + ": vertex " + std::to_string(i) + " has a non-numeric entry", loop, i);
+        out.vertices.push_back({{v[0].get<double>(), v[1].get<double>()}, v.size() == 3 ? v[2].get<double>() : 0.0});
+    }
+    return out;
+}
+
+// A list of loops: an array of vertex arrays.
+Result<void> parse_loops(const json& value, const std::string& key, std::vector<Loop>& out)
+{
+    if (!value.is_array()) return make_error(ErrorCode::invalid_input, "IN-02", "\"" + key + "\" must be an array of loops");
+    for (std::size_t k = 0; k < value.size(); ++k) {
+        auto loop = parse_loop(value[k], "\"" + key + "\" loop " + std::to_string(k), out.size());
+        if (!loop) return tl::unexpected(loop.error());
+        out.push_back(std::move(*loop));
+    }
+    return {};
 }
 
 } // namespace
@@ -26,35 +52,33 @@ Result<RegionDocument> parse_region_json(std::string_view text)
 
     RegionDocument out;
     for (const auto& [key, value] : doc.items()) {
-        if (key == "outer") continue;
+        if (key == "outer" || key == "holes" || key == "loops") continue;
         if (key == "units") {
             if (!value.is_string()) return make_error(ErrorCode::invalid_input, "IN-02", "\"units\" must be a string");
             out.units = value.get<std::string>();
-        } else if (key == "holes") {
-            if (!value.is_array() || !value.empty())
-                return make_error(ErrorCode::invalid_input, "IN-05",
-                                  "regions with holes are not supported yet; holes arrive in v2", 1);
         } else {
             return make_error(ErrorCode::invalid_input, "IN-02", "unknown key \"" + key + "\"");
         }
     }
 
-    const auto outer = doc.find("outer");
-    if (outer == doc.end() || !outer->is_array())
-        return make_error(ErrorCode::invalid_input, "IN-02", "\"outer\" must be an array of vertices");
-    if (!outer->empty() && outer->front().is_array() && !outer->front().empty() && outer->front().front().is_array())
-        return make_error(ErrorCode::invalid_input, "IN-05",
-                          "\"outer\" must be a single loop; regions with holes arrive in v2");
-
-    for (std::size_t i = 0; i < outer->size(); ++i) {
-        const json& v = (*outer)[i];
-        if (!v.is_array() || v.size() < 2 || v.size() > 3)
-            return schema_error("vertex " + std::to_string(i) + " must be [x, y] or [x, y, bulge]", i);
-        for (const json& c : v)
-            if (!c.is_number()) return schema_error("vertex " + std::to_string(i) + " has a non-numeric entry", i);
-        out.region.outer.vertices.push_back(
-            {{v[0].get<double>(), v[1].get<double>()}, v.size() == 3 ? v[2].get<double>() : 0.0});
+    const auto loops = doc.find("loops"), outer = doc.find("outer"), holes = doc.find("holes");
+    std::vector<Loop>& list = out.region.loops;
+    if (loops != doc.end()) {
+        if (outer != doc.end() || holes != doc.end())
+            return make_error(ErrorCode::invalid_input, "IN-02", "use either \"loops\" or \"outer\" with \"holes\", not both");
+        if (auto r = parse_loops(*loops, "loops", list); !r) return tl::unexpected(r.error());
+        if (list.empty()) return make_error(ErrorCode::invalid_input, "IN-02", "\"loops\" must hold at least one loop");
+        return out;
     }
+    if (outer == doc.end())
+        return make_error(ErrorCode::invalid_input, "IN-02", "the document needs \"loops\" or \"outer\"");
+    if (!outer->empty() && outer->front().is_array() && !outer->front().empty() && outer->front().front().is_array())
+        return make_error(ErrorCode::invalid_input, "IN-02", "\"outer\" must be a single loop; use \"loops\" for several");
+    auto first = parse_loop(*outer, "\"outer\"", 0);
+    if (!first) return tl::unexpected(first.error());
+    list.push_back(std::move(*first));
+    if (holes != doc.end())
+        if (auto r = parse_loops(*holes, "holes", list); !r) return tl::unexpected(r.error());
     return out;
 }
 
@@ -69,11 +93,15 @@ Result<RegionDocument> read_region_json(const std::filesystem::path& path)
 
 std::string write_region_json(const RegionDocument& doc)
 {
-    json outer = json::array();
-    for (const BulgeVertex& v : doc.region.outer.vertices) outer.push_back({v.p.x, v.p.y, v.bulge});
+    json loops = json::array();
+    for (const Loop& loop : doc.region.loops) {
+        json vertices = json::array();
+        for (const BulgeVertex& v : loop.vertices) vertices.push_back({v.p.x, v.p.y, v.bulge});
+        loops.push_back(std::move(vertices));
+    }
     json j = json::object();
     if (!doc.units.empty()) j["units"] = doc.units;
-    j["outer"] = std::move(outer);
+    j["loops"] = std::move(loops);
     return j.dump() + "\n";
 }
 
